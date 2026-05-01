@@ -1,0 +1,14 @@
+[gd_scene format=3 uid="uid://rkj12dtdpwx"]
+
+[ext_resource type="PackedScene" uid="uid://b2bsnx8vp24h4" path="res://Scenes/board.tscn" id="1_8gbba"]
+[ext_resource type="PackedScene" uid="uid://imdfjrroph0y" path="res://Scenes/piece.tscn" id="1_jjgbg"]
+
+[node name="Main" type="Node2D" unique_id=1893698936]
+
+[node name="Board" parent="." unique_id=544428359 instance=ExtResource("1_8gbba")]
+position = Vector2(606, 330)
+scale = Vector2(0.305, 0.305)
+
+[node name="Node2D" parent="Board" unique_id=1269690919 instance=ExtResource("1_jjgbg")]
+position = Vector2(127.86885, 131.14754)
+scale = Vector2(5, 5)

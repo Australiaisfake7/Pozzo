@@ -1,0 +1,44 @@
+[gd_scene format=3 uid="uid://imdfjrroph0y"]
+
+[ext_resource type="Script" uid="uid://d113r0w7k1xyw" path="res://Scripts/drag_piece.gd" id="1_jf0mb"]
+[ext_resource type="Texture2D" uid="uid://t71mk6hbaj6y" path="res://Resources/Textures/cburnett/bB.svg" id="1_y70yu"]
+
+[sub_resource type="StyleBoxEmpty" id="StyleBoxEmpty_y70yu"]
+
+[sub_resource type="StyleBoxEmpty" id="StyleBoxEmpty_l2hco"]
+
+[sub_resource type="StyleBoxEmpty" id="StyleBoxEmpty_66160"]
+
+[sub_resource type="StyleBoxEmpty" id="StyleBoxEmpty_xe4ox"]
+
+[sub_resource type="StyleBoxEmpty" id="StyleBoxEmpty_ydv4c"]
+
+[node name="Node2D" type="TextureRect" unique_id=1743710744]
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+grow_horizontal = 2
+grow_vertical = 2
+texture = ExtResource("1_y70yu")
+expand_mode = 1
+
+[node name="Button" type="Button" parent="." unique_id=979129788]
+layout_mode = 1
+anchors_preset = -1
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+theme_override_styles/normal = SubResource("StyleBoxEmpty_y70yu")
+theme_override_styles/pressed = SubResource("StyleBoxEmpty_l2hco")
+theme_override_styles/hover = SubResource("StyleBoxEmpty_66160")
+theme_override_styles/disabled = SubResource("StyleBoxEmpty_xe4ox")
+theme_override_styles/focus = SubResource("StyleBoxEmpty_ydv4c")
+script = ExtResource("1_jf0mb")
+
+[connection signal="button_down" from="Button" to="Button" method="_on_button_down"]
+[connection signal="button_up" from="Button" to="Button" method="_on_button_up"]

@@ -1,0 +1,34 @@
+[gd_scene format=3 uid="uid://rkj12dtdpwx"]
+
+[ext_resource type="PackedScene" uid="uid://b2bsnx8vp24h4" path="res://Scenes/board.tscn" id="1_8gbba"]
+[ext_resource type="Texture2D" uid="uid://t71mk6hbaj6y" path="res://Resources/Textures/cburnett/bB.svg" id="2_jkdf5"]
+[ext_resource type="Texture2D" uid="uid://tgg2go5d0dc6" path="res://Resources/Textures/cburnett/bK.svg" id="3_wsu2k"]
+[ext_resource type="Texture2D" uid="uid://dn5rvnq3kjfi3" path="res://Resources/Textures/cburnett/bN.svg" id="4_k12tt"]
+[ext_resource type="Texture2D" uid="uid://cotqi5hjonmav" path="res://Resources/Textures/cburnett/bP.svg" id="5_h1bgf"]
+[ext_resource type="Texture2D" uid="uid://bgjbvp6s3uffv" path="res://Resources/Textures/cburnett/bQ.svg" id="6_b3802"]
+[ext_resource type="Texture2D" uid="uid://dipinknj758qs" path="res://Resources/Textures/cburnett/bR.svg" id="7_fevyy"]
+[ext_resource type="Texture2D" uid="uid://de6a0rwpcucn" path="res://Resources/Textures/cburnett/wB.svg" id="8_hibaj"]
+[ext_resource type="Texture2D" uid="uid://msh00ooqcb8" path="res://Resources/Textures/cburnett/wK.svg" id="9_pdsj5"]
+[ext_resource type="Texture2D" uid="uid://bjmvbna3nsfjm" path="res://Resources/Textures/cburnett/wN.svg" id="10_ee4r6"]
+[ext_resource type="Texture2D" uid="uid://btwarsrv78cni" path="res://Resources/Textures/cburnett/wP.svg" id="11_gt3je"]
+[ext_resource type="Texture2D" uid="uid://ceiqbb6d8nixv" path="res://Resources/Textures/cburnett/wQ.svg" id="12_3pmx8"]
+[ext_resource type="Texture2D" uid="uid://bjcnk0cxn8kbk" path="res://Resources/Textures/cburnett/wR.svg" id="13_u50mg"]
+
+[node name="Main" type="Node2D" unique_id=1893698936]
+
+[node name="AspectRatioContainer" type="AspectRatioContainer" parent="." unique_id=1946614355]
+top_level = true
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+stretch_mode = 1
+
+[node name="Board" parent="AspectRatioContainer" unique_id=544428359 instance=ExtResource("1_8gbba")]
+layout_mode = 2
+expand_mode = 4
+stretch_mode = 5
+textures = Array[CompressedTexture2D]([ExtResource("11_gt3je"), ExtResource("10_ee4r6"), ExtResource("8_hibaj"), ExtResource("13_u50mg"), ExtResource("12_3pmx8"), ExtResource("9_pdsj5"), ExtResource("5_h1bgf"), ExtResource("4_k12tt"), ExtResource("2_jkdf5"), ExtResource("7_fevyy"), ExtResource("6_b3802"), ExtResource("3_wsu2k")])
