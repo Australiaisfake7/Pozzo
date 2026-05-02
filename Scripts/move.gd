@@ -4,7 +4,7 @@ var start_pos : int:
 	set(value):
 		start_pos = clampi(value, 0, 63)
 
-var  end_pos : int:
+var end_pos : int:
 	set(value):
 		end_pos = clampi(value, 0, 63)
 
@@ -18,6 +18,14 @@ func _init(start_pos : int, end_pos : int, type : int) -> void:
 	self.type = type
 	
 			
-func is_one_tile_move() -> bool:
-	var diff : Vector2i = Vector2i(start_pos % 8, start_pos / 8) - Vector2i(end_pos % 8, end_pos / 8)
-	return max(abs(diff.x), abs(diff.y)) == 1
+func vec_difference() -> Vector2i:
+	var start_aligned_pos : Vector2i = Vector2i(start_pos % 8, floori(start_pos / 8.0))
+	var end_aligned_pos : Vector2i = Vector2i(end_pos % 8, floori(end_pos / 8.0))
+	
+	return end_aligned_pos - start_aligned_pos
+
+func tile_length() -> int:
+	var vec_diff : Vector2i = vec_difference()
+	
+	return max(absi(vec_diff.x), absi(vec_diff.y))
+	
