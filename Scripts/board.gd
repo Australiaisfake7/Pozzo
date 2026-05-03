@@ -5,7 +5,7 @@ extends TextureRect
 var piece_scene : PackedScene = preload("res://Scenes/piece.tscn")
 var pieces : Array[Piece]
 
-var boards : PackedInt64Array = [65280, 66, 36, 129, 8, 16, 71776119061217280, 4755801206503243776, 2594073385365405696, 9295429630892703744, 576460752303423488, 1152921504606846976]
+var boards : PackedInt64Array = [65280, 66, 36, 129, 8, 16, 71776119061217280, 4755801206503243776, 2594073385365405696, -9151314442816847872, 576460752303423488, 1152921504606846976]
 
 var is_white_turn : bool = true
 
@@ -34,7 +34,6 @@ func instantiate_piece(texture : CompressedTexture2D, pos : Vector2, piece_type 
 	move_piece.connect(piece._on_move_piece)
 	delete_piece.connect(piece._on_delete_piece)
 	
-	piece.board_pos = pos
 	piece.piece_type = piece_type
 	piece.move_to(pos)
 	
@@ -56,7 +55,7 @@ func _on_picked(pos : Vector2, piece : Piece) -> void:
 	pass
 
 func _on_placed(pos : Vector2, last_pos : Vector2, piece_type : int, piece : Piece) -> void:
-	pos.clamp(grid_pos_to_board_pos(0), grid_pos_to_board_pos(63))
+	pos = pos.clamp(grid_pos_to_board_pos(0), grid_pos_to_board_pos(63))
 	
 	var move : Move = Move.new(board_pos_to_grid_pos(last_pos), board_pos_to_grid_pos(pos), piece_type)
 	if ChessEngine.is_move_legal(move, boards, is_white_turn):
@@ -77,7 +76,7 @@ func _on_placed(pos : Vector2, last_pos : Vector2, piece_type : int, piece : Pie
 				58: # Black queenside
 					rook_from = 56
 					rook_to = 59
-			move_piece.emit([grid_pos_to_board_pos(rook_from), grid_pos_to_board_pos(rook_to)])
+			move_piece.emit(grid_pos_to_board_pos(rook_from), grid_pos_to_board_pos(rook_to))
 			if is_white_turn:
 				boards[3] ^= (1 << rook_from | 1 << rook_to)
 			else:

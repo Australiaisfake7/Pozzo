@@ -25,7 +25,7 @@ func _process(delta: float) -> void:
 		texture.global_position = get_global_mouse_position() - texture.size / 2.0 
 
 func _on_move_piece(start_pos : Vector2, end_pos : Vector2) -> void:
-	if texture.position == start_pos:
+	if texture.position.is_equal_approx(start_pos):
 		move_to(end_pos)
 
 func _on_delete_piece(pos : Vector2) -> void:
@@ -33,5 +33,6 @@ func _on_delete_piece(pos : Vector2) -> void:
 		texture.queue_free()
 
 func move_to(pos : Vector2) -> void:
+	board_pos = pos
 	var tween : Tween = create_tween()
 	tween.tween_property(texture, "position", pos, 0.1).set_trans(Tween.TRANS_QUAD)
