@@ -1,7 +1,5 @@
 class_name ChessEngine
 
-static var rays : Array[Ray]
-
 class Ray:
 	enum {ROOK, BISHOP, KNIGHT, INVALID}
 	
@@ -11,62 +9,36 @@ class Ray:
 	func _init(ray : int, type : int) -> void:
 		self.ray = ray
 		self.type = type
-	
 
-static func load_rays() -> void:
-	var file : FileAccess = FileAccess.open("res://Resources/rays.dat", FileAccess.READ)
-	if file:
-		var data : Array = file.get_var()
-		rays.clear()
-		for entry in data:
-			rays.append(Ray.new(entry[0], entry[1]))
-	else:
-		push_error("Could not load rays.dat: " + str(FileAccess.get_open_error()))
-		return
-
-static func compute_ray(move : Move) -> Ray:
-	var ray : int = 0
-	var start_pos : Vector2i = Vector2i(move.start_pos % 8, move.start_pos / 8)
-	var end_pos : Vector2i = Vector2i(move.end_pos % 8, move.end_pos / 8)
+static func compute_ray(start_pos : int, end_pos : int) -> Ray:
+	var ray : Ray
+	var start_pos_vec : Vector2i = Vector2i(start_pos % 8, start_pos / 8)
+	var end_pos_vec : Vector2i = Vector2i(end_pos % 8, end_pos / 8)
 	
-	var diff : Vector2i = start_pos - end_pos
+	var diff : Vector2i = start_pos_vec - end_pos_vec
 	if diff == Vector2i.ZERO: return Ray.new(0, Ray.INVALID)
 	
 	if abs(diff.x) == abs(diff.y):
 		# Is diagonal
-		var length : int = max(abs(diff.x), abs(diff.y))
-		for i in range(length - 1):
-			var pos : Vector2i = end_pos + diff / length * (i + 1)
-			var grid_pos : int = pos.x + pos.y * 8
-			ray |= (1 << grid_pos)
-		return Ray.new(ray, Ray.BISHOP)
-	elif (diff.x == 0) != (diff.y == 0):
+		ray = Ray.new(0, Ray.BISHOP)
+	elif diff.x == 0 || diff.y == 0:
 		# Is straight
-		var length : int = max(abs(diff.x), abs(diff.y))
-		for i in range(length - 1):
-			var pos : Vector2i = end_pos + diff / length * (i + 1)
-			var grid_pos : int = pos.x + pos.y * 8
-			ray |= (1 << grid_pos)
-		return Ray.new(ray, Ray.ROOK)
-	elif abs(diff.x) == 1 && abs(diff.y) == 2 || abs(diff.x) == 2 && abs(diff.y) == 1:
+		ray = Ray.new(0, Ray.ROOK)
+	elif (abs(diff.x) == 1 && abs(diff.y) == 2) || (abs(diff.x) == 2 && abs(diff.y) == 1):
 		# Is L shape
-		return Ray.new(ray, Ray.KNIGHT)
+		return Ray.new(0, Ray.KNIGHT)
 	else:
-		return Ray.new(ray, Ray.INVALID)
-	
-static func save_rays_in_file(path : String) -> void:
-	var rays : Array
-	rays.resize(4096)
-	
-	for i in range(64):
-		for j in range(64):
-			var ray : Ray = compute_ray(Move.new(i, j, 0))
-			rays[i * 64 + j] = [ray.ray, ray.type]
-	var file : FileAccess = FileAccess.open(path, FileAccess.WRITE)
-	if file:
-		file.store_var(rays)
-		file.close()
-		
+		return Ray.new(0, Ray.INVALID)
+
+	# Sliding piece calculation
+	var length : int = max(abs(diff.x), abs(diff.y))
+	for i in range(1, length):
+		var pos : Vector2i = end_pos_vec + diff / length * i
+		var grid_pos : int = pos.x + pos.y * 8
+		ray.ray |= (1 << grid_pos)
+	return ray
+
+# Checks for any piece type
 static func is_occupied(pos : int, boards : PackedInt64Array, count_white : bool, count_black : bool) -> bool:
 	var white_board : int = boards[0] | boards[1] | boards[2] | boards[3] | boards[4] | boards[5]
 	var black_board : int = boards[6] | boards[7] | boards[8] | boards[9] | boards[10] | boards[11]
@@ -74,45 +46,211 @@ static func is_occupied(pos : int, boards : PackedInt64Array, count_white : bool
 	
 	return board >> pos & 1 == 1
 
+# Checks for specific piece type(s)
+static func is_piece_at(pos: int, board: int) -> bool:
+	return board >> pos & 1 == 1
+
+static func pawn_moves(pos : int, boards : PackedInt64Array, is_white_move : bool) -> Array[int]:
+	var moves : Array[int]
+	var start_rank : int = 1	 if is_white_move else 6
+	
+	var white_board : int = boards[0] | boards[1] | boards[2] | boards[3] | boards[4] | boards[5]
+	var black_board : int = boards[6] | boards[7] | boards[8] | boards[9] | boards[10] | boards[11]
+	var all_board : int = white_board | black_board
+	
+	var file : int = pos % 8
+	var rank : int = pos / 8
+	
+	var direction : int = 1 if is_white_move else -1
+	
+	if !is_occupied(file + (rank + direction) * 8, boards, true, true):
+		moves.append(file + (rank + direction) * 8)
+		if rank == start_rank && !is_occupied(file + (rank + direction * 2) * 8, boards, true, true):
+			moves.append(file + (rank + direction * 2) * 8)
+	
+	for offset in [-1, 1]:
+		var capture_pos : int = file + offset + (rank + direction) * 8
+		if is_occupied(capture_pos, boards, !is_white_move, is_white_move):
+			moves.append(capture_pos)
+			
+		
+	return moves
+	
+static func knight_moves(pos : int, boards : PackedInt64Array, is_white_move : bool) -> Array[int]:
+	var moves : Array[int]
+	var offsets = [[-2,-1],[-2,1],[-1,-2],[-1,2],[1,-2],[1,2],[2,-1],[2,1]]
+	
+	var file : int = pos % 8
+	var rank : int = pos / 8
+	
+	for offset in offsets:
+		var offset_file : int = file + offset[0]
+		var offset_rank : int = rank + offset[1]
+		
+		if offset_file >= 0 && offset_file < 8 && offset_rank >= 0 && offset_rank < 8 && !is_occupied(offset_file + offset_rank * 8, boards, is_white_move, !is_white_move):
+			moves.append(offset_file + offset_rank * 8)
+	
+	return moves
+	
+static func sliding_moves(pos : int, rook_move : bool, bishop_move : bool, boards : PackedInt64Array, is_white_move : bool) -> Array[int]:
+	var moves : Array[int]
+	
+	var white_board : int = boards[0] | boards[1] | boards[2] | boards[3] | boards[4] | boards[5]
+	var black_board : int = boards[6] | boards[7] | boards[8] | boards[9] | boards[10] | boards[11]
+	var all_board : int = white_board | black_board
+	
+	var file : int = pos % 8
+	var rank : int = pos / 8
+	
+	if rook_move:
+		for dir in [-1, 1]:
+			for amount in range(1, 8):
+				var offset : int = dir * amount		
+				var offset_file : int = offset + file
+				if offset_file < 0 || offset_file >= 8:
+					break
+			
+				var offset_pos : int = offset_file + rank * 8
+			
+				if is_occupied(offset_pos, boards, true, true):
+					var attacked_piece_is_white : bool = is_occupied(offset_pos, boards, true, false)
+					if attacked_piece_is_white == is_white_move:
+						break
+					else:
+						moves.append(offset_pos)
+						break
+			
+				moves.append(offset_pos)
+			
+		for dir in [-1, 1]:
+			for amount in range(1, 8):
+				var offset : int = dir * amount
+				var offset_rank : int = offset + rank
+				if offset_rank < 0 || offset_rank >= 8:
+					break
+			
+				var offset_pos : int = file + offset_rank * 8
+			
+				if is_occupied(offset_pos, boards, true, true):
+					var attacked_piece_is_white : bool = is_occupied(offset_pos, boards, true, false)
+					if attacked_piece_is_white == is_white_move:
+						break
+					else:
+						moves.append(offset_pos)
+						break
+			
+				moves.append(offset_pos)
+				
+	if bishop_move:
+		for dir in [-1, 1]:
+			for amount in range(1, 8):
+				var offset : int = dir * amount
+				var offset_file : int = offset + file
+				var offset_rank : int = offset + rank
+				
+				if offset_file < 0 || offset_file >= 8 || offset_rank < 0 || offset_rank >= 8:
+					break
+			
+				var offset_pos : int = offset_file + offset_rank * 8
+			
+				if is_occupied(offset_pos, boards, true, true):
+					var attacked_piece_is_white : bool = is_occupied(offset_pos, boards, true, false)
+					if attacked_piece_is_white == is_white_move:
+						break
+					else:
+						moves.append(offset_pos)
+						break
+			
+				moves.append(offset_pos)
+			
+		for dir in [-1, 1]:
+			for amount in range(1, 8):
+				var offset : int = dir * amount
+				var offset_file : int = offset + file
+				var offset_rank : int = -offset + rank
+				
+				if offset_file < 0 || offset_file >= 8 || offset_rank < 0 || offset_rank >= 8:
+					break
+			
+				var offset_pos : int = offset_file + offset_rank * 8
+			
+				if is_occupied(offset_pos, boards, true, true):
+					var attacked_piece_is_white : bool = is_occupied(offset_pos, boards, true, false)
+					if attacked_piece_is_white == is_white_move:
+						break
+					else:
+						moves.append(offset_pos)
+						break
+			
+				moves.append(offset_pos)
+			
+	return moves
+
+static func king_moves(pos : int, boards : PackedInt64Array, is_white_move : bool):
+	var moves : Array[int]
+	
+	var file : int = pos % 8
+	var rank : int = pos / 8
+	
+	for r in range(-1, 2):
+		for f in range(-1, 2):
+			var offset_file : int = file + f
+			var offset_rank : int = rank + r
+			
+			if offset_file < 0 || offset_file > 7 || offset_rank < 0 || offset_rank > 7:
+				continue
+			if offset_file == file && offset_rank == rank:
+				continue
+			
+			var offset_pos : int = offset_file + offset_rank * 8
+			
+			if is_occupied(offset_pos, boards, is_white_move, !is_white_move):
+				continue
+			
+			moves.append(offset_pos)
+			
+	return moves
+
 static func is_check(boards : PackedInt64Array, is_white_turn : bool) -> bool:
+	# is_white_turn represents side being checked for check, i.e. the one currently moving
+	
 	var white_board : int = boards[0] | boards[1] | boards[2] | boards[3] | boards[4] | boards[5]
 	var black_board : int = boards[6] | boards[7] | boards[8] | boards[9] | boards[10] | boards[11]
 	var all_board : int = white_board | black_board
 	
 	# Index shift to current side's boards
 	# Use 6 - offset to get opponents boards
-	var black_offset : int = 0 if is_white_turn else 6 
+	var color_offset : int = 0 if is_white_turn else 6 
 	
 	var king_pos : int = 0
 	for i in range(64):
-		if (boards[5 + black_offset] >> i) & 1 == 1:
+		if is_piece_at(i, boards[5 + color_offset]):
 			king_pos = i
 			break
-	for i in range(64):
-		var ray : Ray = rays[king_pos * 64 + i]
-		
-		# Check if movement from square is valid and if there is an attacking piece 
-		if ray.type == Ray.INVALID:
-			continue
-		if ray.type == Ray.KNIGHT:
-			if (boards[1 + 6 - black_offset] >> i) & 1 == 1:
-				return true
-			continue
-		if ray.type == Ray.ROOK:
-			if ((boards[3 + 6 - black_offset] >> i) & 1 == 1 && (ray.ray & all_board) == 0) || ((boards[4 + 6 - black_offset] >> i) & 1 == 1 && (ray.ray & all_board) == 0) || ((boards[5 + 6 - black_offset] >> i) & 1 == 1 && ray.ray == 0):
-				return true
-			continue
-		if ray.type == Ray.BISHOP:
-			if ((boards[2 + 6 - black_offset] >> i) & 1 == 1 && (ray.ray & all_board) == 0) || ((boards[4 + 6 - black_offset] >> i) & 1 == 1 && (ray.ray & all_board) == 0) || ((boards[5 + 6 - black_offset] >> i) & 1 == 1 && ray.ray == 0):
-				return true
-			continue
+
+	for pos in knight_moves(king_pos, boards, is_white_turn):
+		if is_piece_at(pos, boards[1 + 6 - color_offset]):
+			return true
+			
+	# Rook or queen
+	for pos in sliding_moves(king_pos, true, false, boards, is_white_turn):
+		if is_piece_at(pos, boards[3 + 6 - color_offset]) || is_piece_at(pos, boards[4 + 6 - color_offset]):
+			return true
+			
+	# Bishop or queen
+	for pos in sliding_moves(king_pos, false, true, boards, is_white_turn):
+		if is_piece_at(pos, boards[2 + 6 - color_offset]) || is_piece_at(pos, boards[4 + 6 - color_offset]):
+			return true
+			
+	for pos in king_moves(king_pos, boards, is_white_turn):
+		if is_piece_at(pos, boards[5 + 6 - color_offset]):
+			return true
 	
-	# Check attacking pawns# Types 0–5 are white pieces
+	# Check attacking pawns
 	var king_file : int = king_pos % 8
 	var king_rank : int = king_pos / 8
 	
 	var direction : int = 1 if is_white_turn else -1
-	
 	var offset_rank : int = king_rank + direction
 	
 	if offset_rank >= 0 && offset_rank < 8:
@@ -122,7 +260,7 @@ static func is_check(boards : PackedInt64Array, is_white_turn : bool) -> bool:
 			if offset_file < 0 || offset_file > 7:
 				continue
 			
-			if boards[6 - black_offset] >> (offset_file + offset_rank * 8) & 1 == 1:
+			if is_piece_at(offset_file + offset_rank * 8, boards[6 - color_offset]):
 				return true
 	
 	return false
@@ -135,8 +273,8 @@ static func does_move_cause_check(move : Move, boards : PackedInt64Array, is_whi
 	new_boards[move.type] ^= 1 << move.start_pos | 1 << move.end_pos
 	return is_check(new_boards, is_white_turn)
 
-static func is_pawn_move_legal(move : Move, boards : PackedInt64Array, is_white : bool):		
-	var direction : int = 1 if is_white else -1
+static func is_pawn_move_legal(move : Move, boards : PackedInt64Array, is_white_move : bool):		
+	var direction : int = 1 if is_white_move else -1
 	var start_rank : int = move.start_pos / 8
 	var end_rank : int = move.end_pos / 8
 	var start_file : int = move.start_pos % 8
@@ -148,15 +286,15 @@ static func is_pawn_move_legal(move : Move, boards : PackedInt64Array, is_white 
 		if file_diff == 0 && !is_occupied(move.end_pos, boards, true, true):
 			return true
 		elif file_diff == 1:
-			return is_occupied(move.end_pos, boards, !is_white, is_white)
+			return is_occupied(move.end_pos, boards, !is_white_move, is_white_move)
 		else:
 			return false
-	elif rank_diff == 2 && file_diff == 0 && start_rank == (1 if is_white else 6) && !is_occupied(move.start_pos + 8 * direction, boards, true, true) && !is_occupied(move.end_pos, boards, true, true):
+	elif rank_diff == 2 && file_diff == 0 && start_rank == (1 if is_white_move else 6) && !is_occupied(move.start_pos + 8 * direction, boards, true, true) && !is_occupied(move.end_pos, boards, true, true):
 		return true
 	else:
 		return false
 
-static func is_castle_move_legal(move : Move, boards : PackedInt64Array, can_castle_kingside : bool, can_castle_queenside : bool, is_white : bool, is_white_turn) -> bool:
+static func is_castle_move_legal(move : Move, boards : PackedInt64Array, can_castle_kingside : bool, can_castle_queenside : bool, is_white_move : bool, is_white_turn) -> bool:
 	var vec_diff : Vector2i = move.vec_difference()
 	
 	if vec_diff == Vector2i(2, 0):
@@ -167,7 +305,7 @@ static func is_castle_move_legal(move : Move, boards : PackedInt64Array, can_cas
 		if is_occupied(move.start_pos + 1, boards, true, true) || is_occupied(move.end_pos, boards, true, true):
 			return false
 		
-		if is_check(boards, is_white_turn) || does_move_cause_check(Move.new(move.start_pos, move.start_pos + 1, 5 if is_white else 11), boards, is_white_turn) || does_move_cause_check(Move.new(move.start_pos, move.end_pos, 5 if is_white else 11), boards, is_white_turn):
+		if is_check(boards, is_white_turn) || does_move_cause_check(Move.new(move.start_pos, move.start_pos + 1, 5 if is_white_move else 11), boards, is_white_turn) || does_move_cause_check(Move.new(move.start_pos, move.end_pos, 5 if is_white_move else 11), boards, is_white_turn):
 			return false
 	elif vec_diff == Vector2i(-2, 0):
 		# Castled queenside
@@ -177,7 +315,7 @@ static func is_castle_move_legal(move : Move, boards : PackedInt64Array, can_cas
 		if is_occupied(move.end_pos - 1, boards, true, true) || is_occupied(move.end_pos, boards, true, true) || is_occupied(move.end_pos + 1, boards, true, true):
 			return false
 		
-		if is_check(boards, is_white_turn) || does_move_cause_check(Move.new(move.start_pos, move.start_pos - 1, 5 if is_white else 11), boards, is_white_turn) || does_move_cause_check(Move.new(move.start_pos, move.end_pos, 5 if is_white else 11), boards, is_white_turn):
+		if is_check(boards, is_white_turn) || does_move_cause_check(Move.new(move.start_pos, move.start_pos - 1, 5 if is_white_move else 11), boards, is_white_turn) || does_move_cause_check(Move.new(move.start_pos, move.end_pos, 5 if is_white_move else 11), boards, is_white_turn):
 			return false
 	else:
 		return false
@@ -190,98 +328,151 @@ static func is_move_castle(move : Move) -> bool:
 				return true
 	return false
 
-static func is_move_legal(move : Move, boards : PackedInt64Array, is_white_turn : bool) -> bool:
-	print("--- Checking move: %d -> %d (type %d) ---" % [move.start_pos, move.end_pos, move.type])
+static func is_move_legal(move : Move, boards : PackedInt64Array, is_white_turn : bool, allow_print : bool) -> bool:
+	if allow_print:
+		print("--- Checking move: %d -> %d (type %d) ---" % [move.start_pos, move.end_pos, move.type])
+	
+	if move.end_pos < 0 || move.end_pos >= 64:
+		if allow_print:
+			print("REJECTED: outside of board")
+		return false
 	
 	if move.start_pos == move.end_pos:
-		print("REJECTED: same square")
+		if allow_print:
+			print("REJECTED: same square")
 		return false
 		
 	# Types 0–5 are white pieces
-	var is_white : bool = true if move.type <= 5 else false
+	var is_white_move : bool = true if move.type <= 5 else false
 	
-	if is_white != is_white_turn:
-		print("REJECTED: wrong turn")
+	if is_white_move != is_white_turn:
+		if allow_print:
+			print("REJECTED: wrong turn")
 		return false
 		
 	var white_board : int = boards[0] | boards[1] | boards[2] | boards[3] | boards[4] | boards[5]
 	var black_board : int = boards[6] | boards[7] | boards[8] | boards[9] | boards[10] | boards[11]
 	
-	if is_white && is_occupied(move.end_pos, boards, true, false) || !is_white && is_occupied(move.end_pos, boards, false, true):
-		print("REJECTED: destination occupied by friendly")
+	if is_white_move && is_occupied(move.end_pos, boards, true, false) || !is_white_move && is_occupied(move.end_pos, boards, false, true):
+		if allow_print:
+			print("REJECTED: destination occupied by friendly")
 		return false
 		
 	if move.type == 0 || move.type == 6:
 		# Is pawn move
-		if is_pawn_move_legal(move, boards, is_white):
+		if is_pawn_move_legal(move, boards, is_white_move):
 			if does_move_cause_check(move, boards, is_white_turn):
-				print("REJECTED: move leaves king in check")
+				if allow_print:
+					print("REJECTED: move leaves king in check")
 				return false
 			return true
 		else:
-			print("REJECTED: illegal pawn move")
+			if allow_print:
+				print("REJECTED: illegal pawn move")
 			return false
 	
-	var ray : Ray = rays[move.start_pos * 64 + move.end_pos]
+	var ray : Ray = compute_ray(move.start_pos, move.end_pos)
 	
 	if ray.type == Ray.INVALID:
-		print("REJECTED: invalid ray between %d and %d" % [move.start_pos, move.end_pos])
+		if allow_print:
+			print("REJECTED: invalid ray between %d and %d" % [move.start_pos, move.end_pos])
 		return false
 		
 	if ray.type == Ray.KNIGHT:
 		if move.type != 1 && move.type != 7:
-			print("REJECTED: piece cannot make knight move")
+			if allow_print:
+				print("REJECTED: piece cannot make knight move")
 			return false
 		if does_move_cause_check(move, boards, is_white_turn):
-			print("REJECTED: move leaves king in check")
+			if allow_print:
+				print("REJECTED: move leaves king in check")
 			return false
 		return true
 		
 	if ray.type == Ray.ROOK:
 		if move.type != 3 && move.type != 9 && move.type != 4 && move.type != 10 && move.type != 5 && move.type != 11:
-			print("REJECTED: piece cannot make rook move")
+			if allow_print:
+				print("REJECTED: piece cannot make rook move")
 			return false
 			
 		# Check for blocking piece
 		if ray.ray & (white_board | black_board) != 0:
-			print("REJECTED: ray is blocked. Blocking mask: %d" % [ray.ray & (white_board | black_board)])
+			if allow_print:
+				print("REJECTED: ray is blocked. Blocking mask: %d" % [ray.ray & (white_board | black_board)])
 			return false
 			
 		if (move.type == 5 || move.type == 11):
 			if is_move_castle(move):
-				return is_castle_move_legal(move, boards, true, true, is_white, is_white_turn)
+				return is_castle_move_legal(move, boards, true, true, is_white_move, is_white_turn)
 			return move.tile_length() == 1 && !does_move_cause_check(move, boards, is_white_turn)
 			
 		if does_move_cause_check(move, boards, is_white_turn):
-			print("REJECTED: move leaves king in check")
+			if allow_print:
+				print("REJECTED: move leaves king in check")
 			return false
 		return true
 		
 	if ray.type == Ray.BISHOP:
 		if move.type != 2 && move.type != 8 && move.type != 4 && move.type != 10 && move.type != 5 && move.type != 11:
-			print("REJECTED: piece cannot make bishop move")
+			if allow_print:
+				print("REJECTED: piece cannot make bishop move")
 			return false
 			
 		# Check for blocking piece
 		if ray.ray & (white_board | black_board) != 0:
-			print("REJECTED: ray is blocked. Blocking mask: %d" % [ray.ray & (white_board | black_board)])
+			if allow_print:
+				print("REJECTED: ray is blocked. Blocking mask: %d" % [ray.ray & (white_board | black_board)])
 			return false
 		
 		if (move.type == 5 || move.type == 11):
 			if move.tile_length() == 1:
 				if does_move_cause_check(move, boards, is_white_turn):
-					print("REJECTED: move leaves king in check")
+					if allow_print:
+						print("REJECTED: move leaves king in check")
 					return false
 				return true
-			print("REJECTED: king cannot move more than 1 tile")
+			if allow_print:
+				print("REJECTED: king cannot move more than 1 tile")
 			return false
 			
 		if does_move_cause_check(move, boards, is_white_turn):
-			print("REJECTED: move leaves king in check")
+			if allow_print:
+				print("REJECTED: move leaves king in check")
 			return false
 		return true
 			
 	return false
+	
+static func get_legal_moves(boards : PackedInt64Array, is_white_turn : bool) -> Array[Move]:
+	var color_offset : int = 0 if is_white_turn else 6
+	var moves : Array[Move]
+	
+	for type in range(color_offset, color_offset + 6):
+		for i in range(64):
+			if !is_piece_at(i, boards[type]):
+				continue
+			var move_targets : Array[int]
+			match type % 6:
+				0: move_targets = pawn_moves(i, boards, is_white_turn)
+				1: move_targets = knight_moves(i, boards, is_white_turn)
+				2: move_targets = sliding_moves(i, false, true, boards, is_white_turn) # Bishop
+				3: move_targets = sliding_moves(i, true, false, boards, is_white_turn) # Rook
+				4: move_targets = sliding_moves(i, true, true, boards, is_white_turn)  # Queen
+				5: move_targets = king_moves(i, boards, is_white_turn)
+				
+			for pos in move_targets:
+				var move : Move = Move.new(i, pos, type)
+				if !is_move_legal(move, boards, is_white_turn, false):
+					continue
+				moves.append(move)
+				
+	return moves
+	
+static func generate_best_move(boards : PackedInt64Array, is_white_turn : bool) -> Move:
+	var legal_moves : Array[Move] = get_legal_moves(boards, is_white_turn)
+	legal_moves.shuffle()
+	
+	return legal_moves[0]
 	
 static func print_board(boards : PackedInt64Array) -> void:
 	var piece_chars = ["P","N","B","R","Q","K","p","n","b","r","q","k"]
@@ -291,7 +482,7 @@ static func print_board(boards : PackedInt64Array) -> void:
 			var sq = rank * 8 + file
 			var found = "."
 			for i in range(12):
-				if boards[i] >> sq & 1 == 1:
+				if is_piece_at(sq, boards[i]):
 					found = piece_chars[i]
 					break
 			row += found + " "
