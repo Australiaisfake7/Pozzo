@@ -10,20 +10,31 @@ var boards : PackedInt64Array = [65280, 66, 36, 129, 8, 16, 71776119061217280, 4
 var is_white_turn : bool = true
 var is_white_player : bool = true
 
+var engine_thread : Thread
+var is_engine_thinking : bool
+
 signal move_piece(start_pos : Vector2, end_pos : Vector2)
 signal delete_piece(pos : Vector2)
 
-func board_pos_to_grid_pos(position : Vector2) -> int:
+func _board_pos_to_grid_pos(position : Vector2) -> int:
 	var tile_size : Vector2 = size / 8.0
+	
 	var aligned_pos : Vector2i = (position / tile_size).round()
+	if is_white_player:
+		aligned_pos.y = 7 - aligned_pos.y
+	
 	return aligned_pos.x + aligned_pos.y * 8
 	
-func grid_pos_to_board_pos(position : int) -> Vector2:
+func _grid_pos_to_board_pos(position : int) -> Vector2:
 	var tile_size : Vector2 = size / 8.0
 	var aligned_pos : Vector2i = Vector2i(position % 8, floori(position / 8.0))
+	
+	if is_white_player:
+		aligned_pos.y = 7 - aligned_pos.y
+	
 	return Vector2(aligned_pos) * tile_size
 
-func instantiate_piece(texture : CompressedTexture2D, pos : Vector2, piece_type : int) -> void:
+func _instantiate_piece(texture : CompressedTexture2D, pos : Vector2, piece_type : int) -> void:
 	var piece_texture : TextureRect = piece_scene.instantiate()
 	var piece : Piece = piece_texture.find_child("Button")
 	
@@ -37,16 +48,16 @@ func instantiate_piece(texture : CompressedTexture2D, pos : Vector2, piece_type 
 	
 	piece.piece_type = piece_type
 	piece.move_to(pos)
-	piece.is_draggable = piece_type < 6 == is_white_player
+	piece.is_draggable = (piece_type < 6) == is_white_player
 	
-func instantiate_pieces() -> void:
+func _instantiate_pieces() -> void:
 	for i in boards.size():
 		for j in range(64):
 			if (boards[i] >> j) & 1 == 1:
-				instantiate_piece(textures[i], grid_pos_to_board_pos(j), i)
+				_instantiate_piece(textures[i], _grid_pos_to_board_pos(j), i)
 
-func make_move(move : Move) -> void:
-	if ChessEngine.is_move_legal(move, boards, is_white_turn, true):
+func _make_move(move : Move) -> void:
+	if ChessEngine.is_move_legal(move, boards, is_white_turn):
 		# Move rook piece if move was castling
 		if ChessEngine.is_move_castle(move):
 			var rook_from : int
@@ -65,43 +76,69 @@ func make_move(move : Move) -> void:
 					rook_from = 56
 					rook_to = 59
 					
-			move_piece.emit(grid_pos_to_board_pos(rook_from), grid_pos_to_board_pos(rook_to))
+			move_piece.emit(_grid_pos_to_board_pos(rook_from), _grid_pos_to_board_pos(rook_to))
 			if is_white_turn:
 				boards[3] ^= (1 << rook_from | 1 << rook_to)
 			else:
 				boards[9] ^= (1 << rook_from | 1 << rook_to)
 				
-		delete_piece.emit(grid_pos_to_board_pos(move.end_pos))
+		delete_piece.emit(_grid_pos_to_board_pos(move.end_pos))
 		
 		# Update bitboards
 		for i in range(12):
 			boards[i] = boards[i] & ~(1 << move.end_pos)
 		boards[move.type] = boards[move.type] ^ (1 << move.start_pos | 1 << move.end_pos)
 		
-		move_piece.emit(grid_pos_to_board_pos(move.start_pos), grid_pos_to_board_pos(move.end_pos))
+		move_piece.emit(_grid_pos_to_board_pos(move.start_pos), _grid_pos_to_board_pos(move.end_pos))
 		
 		# Change turn
 		is_white_turn = !is_white_turn
-		
 		if is_white_turn != is_white_player:
-			var engine_move : Move = ChessEngine.generate_best_move(boards, is_white_turn)
-			make_move(engine_move)
+			_start_engine(boards.duplicate(), is_white_turn, 3)
 	else:
-		move_piece.emit(grid_pos_to_board_pos(move.start_pos), grid_pos_to_board_pos(move.start_pos))
+		move_piece.emit(_grid_pos_to_board_pos(move.start_pos), _grid_pos_to_board_pos(move.start_pos))
 	ChessEngine.print_board(boards)
+
+func _on_engine_finished(move : Move) -> void:
+	is_engine_thinking = false
+	if engine_thread and engine_thread.is_started():
+		engine_thread.wait_to_finish()
+		
+	if move != null:
+		_make_move(move)
+
+func _run_engine(boards_copy : PackedInt64Array, is_white_turn : bool, depth : int) -> void:
+	var move : Move = ChessEngine.find_best_move(boards_copy, is_white_turn, depth)
+	
+	call_deferred("_on_engine_finished", move)
+
+func _start_engine(boards_copy : PackedInt64Array, is_white_turn : bool, depth : int) -> void:
+	if is_engine_thinking:
+		return
+	is_engine_thinking = true
+	engine_thread = Thread.new()
+	engine_thread.start(_run_engine.bind(boards_copy, is_white_turn, depth))
 
 func _ready() -> void:
 	await get_tree().process_frame
-	instantiate_pieces()
+	_instantiate_pieces()
 	ChessEngine.print_board(boards)
 	
 	if !is_white_player:
-		var engine_move : Move = ChessEngine.generate_best_move(boards, is_white_turn)
-		make_move(engine_move)
+		var engine_move : Move = ChessEngine.find_best_move(boards, is_white_turn, 3)
+		_make_move(engine_move)
 		
 func _on_picked(pos : Vector2, piece : Piece) -> void:
 	pass
 
 func _on_placed(pos : Vector2, last_pos : Vector2, piece_type : int) -> void:
-	var move : Move = Move.new(board_pos_to_grid_pos(last_pos), board_pos_to_grid_pos(pos), piece_type)
-	make_move(move)
+	if is_engine_thinking:
+		var move : Move = Move.new(_board_pos_to_grid_pos(last_pos), _board_pos_to_grid_pos(last_pos), piece_type)
+		_make_move(move)
+	else:
+		var move : Move = Move.new(_board_pos_to_grid_pos(last_pos), _board_pos_to_grid_pos(pos), piece_type)
+		_make_move(move)
+		
+func _exit_tree() -> void:
+	if engine_thread and engine_thread.is_started():
+		engine_thread.wait_to_finish()
