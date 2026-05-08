@@ -192,7 +192,7 @@ static func _sliding_moves(pos : int, rook_move : bool, bishop_move : bool, boar
 			
 	return moves
 
-static func _king_moves(pos : int, boards : PackedInt64Array, is_white_move : bool):
+static func _king_moves(pos : int, boards : PackedInt64Array, is_white_move : bool, allow_castling : bool):
 	var moves : PackedInt64Array
 	
 	var file : int = pos % 8
@@ -200,12 +200,13 @@ static func _king_moves(pos : int, boards : PackedInt64Array, is_white_move : bo
 	
 	for r in range(-1, 2):
 		for f in range(-1, 2):
+			if f == 0 && r == 0:
+				continue
+			
 			var offset_file : int = file + f
 			var offset_rank : int = rank + r
 			
 			if offset_file < 0 || offset_file > 7 || offset_rank < 0 || offset_rank > 7:
-				continue
-			if offset_file == file && offset_rank == rank:
 				continue
 			
 			var offset_pos : int = offset_file + offset_rank * 8
@@ -214,6 +215,10 @@ static func _king_moves(pos : int, boards : PackedInt64Array, is_white_move : bo
 				continue
 			
 			moves.append(offset_pos)
+			
+	if allow_castling && (pos == 4 || pos == 60):
+		moves.append(pos - 2)
+		moves.append(pos + 2)
 			
 	return moves
 
@@ -248,7 +253,7 @@ static func _is_check(boards : PackedInt64Array, is_white_turn : bool) -> bool:
 		if _is_piece_at(pos, boards[2 + 6 - color_offset]) || _is_piece_at(pos, boards[4 + 6 - color_offset]):
 			return true
 			
-	for pos in _king_moves(king_pos, boards, is_white_turn):
+	for pos in _king_moves(king_pos, boards, is_white_turn, false):
 		if _is_piece_at(pos, boards[5 + 6 - color_offset]):
 			return true
 	
@@ -329,28 +334,28 @@ static func _is_pawn_move_legal(move : Move, boards : PackedInt64Array, is_white
 	else:
 		return false
 
-static func _is_castle_move_legal(move : Move, boards : PackedInt64Array, can_castle_kingside : bool, can_castle_queenside : bool, is_white_move : bool, is_white_turn) -> bool:
+static func _is_castle_move_legal(move : Move, boards : PackedInt64Array, castle_rights : Array[bool], is_white_move : bool) -> bool:
 	var vec_diff : Vector2i = move.vec_difference()
 	
 	if vec_diff == Vector2i(2, 0):
 		# Castled kingside
-		if !can_castle_kingside:
+		if !(castle_rights[0] if is_white_move else castle_rights[2]):
 			return false
 		
 		if _is_occupied(move.start_pos + 1, boards, true, true) || _is_occupied(move.end_pos, boards, true, true):
 			return false
 		
-		if _is_check(boards, is_white_turn) || _does_move_cause_check(Move.new(move.start_pos, move.start_pos + 1, 5 if is_white_move else 11), boards, is_white_turn) || _does_move_cause_check(Move.new(move.start_pos, move.end_pos, 5 if is_white_move else 11), boards, is_white_turn):
+		if _is_check(boards, is_white_move) || _does_move_cause_check(Move.new(move.start_pos, move.start_pos + 1, 5 if is_white_move else 11), boards, is_white_move) || _does_move_cause_check(Move.new(move.start_pos, move.end_pos, 5 if is_white_move else 11), boards, is_white_move):
 			return false
 	elif vec_diff == Vector2i(-2, 0):
 		# Castled queenside
-		if !can_castle_queenside:
+		if !(castle_rights[1] if is_white_move else castle_rights[3]):
 			return false
 		
 		if _is_occupied(move.end_pos - 1, boards, true, true) || _is_occupied(move.end_pos, boards, true, true) || _is_occupied(move.end_pos + 1, boards, true, true):
 			return false
 		
-		if _is_check(boards, is_white_turn) || _does_move_cause_check(Move.new(move.start_pos, move.start_pos - 1, 5 if is_white_move else 11), boards, is_white_turn) || _does_move_cause_check(Move.new(move.start_pos, move.end_pos, 5 if is_white_move else 11), boards, is_white_turn):
+		if _is_check(boards, is_white_move) || _does_move_cause_check(Move.new(move.start_pos, move.start_pos - 1, 5 if is_white_move else 11), boards, is_white_move) || _does_move_cause_check(Move.new(move.start_pos, move.end_pos, 5 if is_white_move else 11), boards, is_white_move):
 			return false
 	else:
 		return false
@@ -363,7 +368,7 @@ static func is_move_castle(move : Move) -> bool:
 				return true
 	return false
 
-static func is_move_legal(move : Move, boards : PackedInt64Array, is_white_turn : bool) -> bool:
+static func is_move_legal(move : Move, boards : PackedInt64Array, castle_rights : Array[bool], is_white_turn : bool) -> bool:
 	print("--- Checking move: %d -> %d (type %d) ---" % [move.start_pos, move.end_pos, move.type])
 	
 	if move.end_pos < 0 || move.end_pos >= 64:
@@ -426,7 +431,7 @@ static func is_move_legal(move : Move, boards : PackedInt64Array, is_white_turn 
 			
 		if (move.type == 5 || move.type == 11):
 			if is_move_castle(move):
-				return _is_castle_move_legal(move, boards, true, true, is_white_move, is_white_turn)
+				return _is_castle_move_legal(move, boards, castle_rights, is_white_move)
 			return move.tile_length() == 1 && !_does_move_cause_check(move, boards, is_white_turn)
 			
 		if _does_move_cause_check(move, boards, is_white_turn):
@@ -460,7 +465,7 @@ static func is_move_legal(move : Move, boards : PackedInt64Array, is_white_turn 
 			
 	return false
 	
-static func _is_generated_move_legal(move : Move, boards : PackedInt64Array, is_white_turn : bool) -> bool:
+static func _is_generated_move_legal(move : Move, boards : PackedInt64Array, is_white_turn : bool, castle_rights : Array[bool]) -> bool:
 	if move.end_pos < 0 || move.end_pos >= 64:
 		return false
 	
@@ -506,7 +511,7 @@ static func _is_generated_move_legal(move : Move, boards : PackedInt64Array, is_
 			
 		if (move.type == 5 || move.type == 11):
 			if is_move_castle(move):
-				return _is_castle_move_legal(move, boards, true, true, is_white_move, is_white_turn)
+				return _is_castle_move_legal(move, boards, castle_rights, is_white_move)
 			return move.tile_length() == 1 && !_does_move_cause_check(move, boards, is_white_turn)
 			
 		if _does_move_cause_check(move, boards, is_white_turn):
@@ -534,7 +539,7 @@ static func _is_generated_move_legal(move : Move, boards : PackedInt64Array, is_
 			
 	return false
 
-static func _get_legal_moves(boards : PackedInt64Array, is_white_turn : bool) -> Array[Move]:
+static func _get_pseudo_legal_moves(boards : PackedInt64Array, is_white_turn : bool) -> Array[Move]:
 	var color_offset : int = 0 if is_white_turn else 6
 	var moves : Array[Move]
 	
@@ -549,12 +554,10 @@ static func _get_legal_moves(boards : PackedInt64Array, is_white_turn : bool) ->
 				2: move_targets = _sliding_moves(i, false, true, boards, is_white_turn) # Bishop
 				3: move_targets = _sliding_moves(i, true, false, boards, is_white_turn) # Rook
 				4: move_targets = _sliding_moves(i, true, true, boards, is_white_turn)  # Queen
-				5: move_targets = _king_moves(i, boards, is_white_turn)
+				5: move_targets = _king_moves(i, boards, is_white_turn, true)
 				
 			for pos in move_targets:
 				var move : Move = Move.new(i, pos, type)
-				if !_is_generated_move_legal(move, boards, is_white_turn):
-					continue
 				moves.append(move)
 				
 	return moves
@@ -567,7 +570,7 @@ static func _count_pieces_in_board(board : int) -> int:
 	
 	return count
 
-static func _get_all_pieces(boards : PackedInt64Array) -> PackedInt64Array:
+static func _get_all_piece_counts(boards : PackedInt64Array) -> PackedInt64Array:
 	var pieces : PackedInt64Array
 	
 	for i in range(12):
@@ -578,10 +581,29 @@ static func _get_all_pieces(boards : PackedInt64Array) -> PackedInt64Array:
 		pieces.append_array(array)
 					
 	return pieces
+	
+static func _get_updated_castle_rights(move: Move, castle_rights: Array[bool]) -> Array[bool]:
+	var new_rights : Array[bool] = castle_rights.duplicate()
+	
+	match move.start_pos:
+		4:  new_rights[0] = false; new_rights[1] = false # White king
+		0:  new_rights[1] = false
+		7:  new_rights[0] = false
+		60: new_rights[2] = false; new_rights[3] = false # Black king
+		56: new_rights[3] = false
+		63: new_rights[2] = false
+
+	match move.end_pos:
+		0:  new_rights[1] = false
+		7:  new_rights[0] = false
+		56: new_rights[3] = false
+		63: new_rights[2] = false
+		
+	return new_rights
 
 # Returns static eval where white is positive and black is negative
 static func _static_eval(boards : PackedInt64Array, is_white_turn : bool) -> float:
-	var pieces : PackedInt64Array = _get_all_pieces(boards)
+	var pieces : PackedInt64Array = _get_all_piece_counts(boards)
 	var sum : int = 0
 	
 	for piece in pieces:
@@ -589,24 +611,34 @@ static func _static_eval(boards : PackedInt64Array, is_white_turn : bool) -> flo
 		
 	return sum / 100.0
 
-static func _tree_search_eval(boards : PackedInt64Array, is_white_turn : bool, depth : int) -> float:
+# Negamax search
+static func _tree_search_eval(boards : PackedInt64Array, is_white_turn : bool, depth : int, alpha : float, beta : float, castle_rights : Array[bool]) -> float:
+	var legal_moves : Array[Move] = _get_pseudo_legal_moves(boards, is_white_turn)
+	
+	var legal_move_found : bool = false
+	for move in legal_moves:
+		if !_is_generated_move_legal(move, boards, is_white_turn, castle_rights):
+			continue
+		legal_move_found = true
+		alpha = max(alpha, -_tree_search_eval(_boards_after_move(move, boards), !is_white_turn, depth - 1, -beta, -alpha, _get_updated_castle_rights(move, castle_rights)))
+		
+		if alpha >= beta:
+			break
+	if !legal_move_found:
+		if _is_check(boards, is_white_turn):
+			return -1000.0 - depth
+		else:
+			return 0.0
+	
 	if depth == 0:
 		# Static eval
 		return _static_eval(boards, is_white_turn) * (1 if is_white_turn else -1)
 	
-	var legal_moves : Array[Move] = _get_legal_moves(boards, is_white_turn)	
-	
-	# Does static eval of all legal moves
-	# Eval is from the perspective of the current player
-	var max_eval : float = -INF
-		
-	for move in legal_moves:
-		max_eval = max(max_eval, -_tree_search_eval(_boards_after_move(move, boards), !is_white_turn, depth - 1))
-	return max_eval
+	return alpha
 	
 
-static func find_best_move(boards : PackedInt64Array, is_white_turn : bool, depth : int) -> Move:
-	var legal_moves : Array[Move] = _get_legal_moves(boards, is_white_turn)
+static func find_best_move(boards : PackedInt64Array, is_white_turn : bool, depth : int, castle_rights : Array[bool]) -> Move:
+	var legal_moves : Array[Move] = _get_pseudo_legal_moves(boards, is_white_turn)
 	
 	if legal_moves.size() == 0:
 		print("No moves available")
@@ -614,13 +646,20 @@ static func find_best_move(boards : PackedInt64Array, is_white_turn : bool, dept
 	var start_time : int = Time.get_ticks_usec()
 		
 	var max_eval : float = -INF
+	var alpha : float = -INF
+	var beta : float = INF
 	var best_move : Move
 	
 	for move in legal_moves:
-		var eval : float = -_tree_search_eval(_boards_after_move(move, boards), !is_white_turn, depth - 1)
+		if !_is_generated_move_legal(move, boards, is_white_turn, castle_rights):
+			continue
+		
+		var eval : float = -_tree_search_eval(_boards_after_move(move, boards), !is_white_turn, depth - 1, -beta, -alpha, _get_updated_castle_rights(move, castle_rights))
 		if eval > max_eval:
 			max_eval = eval
 			best_move = move
+		
+		alpha = max(alpha, eval)
 		
 	var end_time : int = Time.get_ticks_usec()
 	print("Search took " + str((end_time - start_time) / 1000.0) + " ms")

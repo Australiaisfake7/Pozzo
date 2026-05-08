@@ -10,6 +10,8 @@ var boards : PackedInt64Array = [65280, 66, 36, 129, 8, 16, 71776119061217280, 4
 var is_white_turn : bool = true
 var is_white_player : bool = true
 
+var castle_rights : Array[bool] = [true, true, true, true]
+
 var engine_thread : Thread
 var is_engine_thinking : bool
 
@@ -57,7 +59,7 @@ func _instantiate_pieces() -> void:
 				_instantiate_piece(textures[i], _grid_pos_to_board_pos(j), i)
 
 func _make_move(move : Move) -> void:
-	if ChessEngine.is_move_legal(move, boards, is_white_turn):
+	if ChessEngine.is_move_legal(move, boards, castle_rights, is_white_turn):
 		# Move rook piece if move was castling
 		if ChessEngine.is_move_castle(move):
 			var rook_from : int
@@ -89,12 +91,35 @@ func _make_move(move : Move) -> void:
 			boards[i] = boards[i] & ~(1 << move.end_pos)
 		boards[move.type] = boards[move.type] ^ (1 << move.start_pos | 1 << move.end_pos)
 		
+		match move.start_pos:
+			4:  # White king
+				castle_rights[0] = false
+				castle_rights[1] = false
+			0:  # White queenside rook
+				castle_rights[1] = false
+			7:  # White kingside rook
+				castle_rights[0] = false
+			60: # Black king
+				castle_rights[2] = false
+				castle_rights[3] = false
+			56: # Black queenside rook
+				castle_rights[3] = false
+			63: # Black kingside rook
+				castle_rights[2] = false
+
+		# Revoke rights if a rook is captured on its starting square
+		match move.end_pos:
+			0:  castle_rights[1] = false
+			7:  castle_rights[0] = false
+			56: castle_rights[2] = false
+			63: castle_rights[3] = false
+		
 		move_piece.emit(_grid_pos_to_board_pos(move.start_pos), _grid_pos_to_board_pos(move.end_pos))
 		
 		# Change turn
 		is_white_turn = !is_white_turn
 		if is_white_turn != is_white_player:
-			_start_engine(boards.duplicate(), is_white_turn, 3)
+			_start_engine(boards.duplicate(), is_white_turn, 4)
 	else:
 		move_piece.emit(_grid_pos_to_board_pos(move.start_pos), _grid_pos_to_board_pos(move.start_pos))
 	ChessEngine.print_board(boards)
@@ -107,8 +132,8 @@ func _on_engine_finished(move : Move) -> void:
 	if move != null:
 		_make_move(move)
 
-func _run_engine(boards_copy : PackedInt64Array, is_white_turn : bool, depth : int) -> void:
-	var move : Move = ChessEngine.find_best_move(boards_copy, is_white_turn, depth)
+func _run_engine(boards_copy : PackedInt64Array, is_white_turn : bool, depth : int, castle_rights : Array[bool]) -> void:
+	var move : Move = ChessEngine.find_best_move(boards_copy, is_white_turn, depth, castle_rights)
 	
 	call_deferred("_on_engine_finished", move)
 
@@ -117,7 +142,7 @@ func _start_engine(boards_copy : PackedInt64Array, is_white_turn : bool, depth :
 		return
 	is_engine_thinking = true
 	engine_thread = Thread.new()
-	engine_thread.start(_run_engine.bind(boards_copy, is_white_turn, depth))
+	engine_thread.start(_run_engine.bind(boards_copy, is_white_turn, depth, castle_rights.duplicate()))
 
 func _ready() -> void:
 	await get_tree().process_frame
@@ -125,8 +150,7 @@ func _ready() -> void:
 	ChessEngine.print_board(boards)
 	
 	if !is_white_player:
-		var engine_move : Move = ChessEngine.find_best_move(boards, is_white_turn, 3)
-		_make_move(engine_move)
+		_start_engine(boards.duplicate(), is_white_turn, 4)
 		
 func _on_picked(pos : Vector2, piece : Piece) -> void:
 	pass
