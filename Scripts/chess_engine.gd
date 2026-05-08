@@ -613,6 +613,10 @@ static func _static_eval(boards : PackedInt64Array, is_white_turn : bool) -> flo
 
 # Negamax search
 static func _tree_search_eval(boards : PackedInt64Array, is_white_turn : bool, depth : int, alpha : float, beta : float, castle_rights : Array[bool]) -> float:
+	if depth == 0:
+		# Static eval
+		return _static_eval(boards, is_white_turn) * (1 if is_white_turn else -1)
+	
 	var legal_moves : Array[Move] = _get_pseudo_legal_moves(boards, is_white_turn)
 	
 	var legal_move_found : bool = false
@@ -629,10 +633,6 @@ static func _tree_search_eval(boards : PackedInt64Array, is_white_turn : bool, d
 			return -1000.0 - depth
 		else:
 			return 0.0
-	
-	if depth == 0:
-		# Static eval
-		return _static_eval(boards, is_white_turn) * (1 if is_white_turn else -1)
 	
 	return alpha
 	
