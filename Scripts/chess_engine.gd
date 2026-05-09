@@ -1,6 +1,12 @@
 class_name ChessEngine
 
-const piece_values : PackedInt64Array = [120, 300, 340, 500, 900, 0]
+const PIECE_VALUES : PackedInt64Array = [120, 300, 340, 500, 900, 0]
+const MAX_DEPTH = 8
+
+# Debug vars
+static var nodes_searched : int = 0
+static var max_depth_searched : int = 0
+static var time_in_check : int = 0
 
 class Ray:
 	enum {ROOK, BISHOP, KNIGHT, INVALID}
@@ -224,6 +230,7 @@ static func _king_moves(pos : int, boards : PackedInt64Array, is_white_move : bo
 
 static func _is_check(boards : PackedInt64Array, is_white_turn : bool) -> bool:
 	# is_white_turn represents side being checked for check, i.e. the one currently moving
+	var start_time : int = Time.get_ticks_msec()
 	
 	var white_board : int = boards[0] | boards[1] | boards[2] | boards[3] | boards[4] | boards[5]
 	var black_board : int = boards[6] | boards[7] | boards[8] | boards[9] | boards[10] | boards[11]
@@ -241,20 +248,24 @@ static func _is_check(boards : PackedInt64Array, is_white_turn : bool) -> bool:
 
 	for pos in _knight_moves(king_pos, boards, is_white_turn):
 		if _is_piece_at(pos, boards[1 + 6 - color_offset]):
+			time_in_check += Time.get_ticks_msec() - start_time
 			return true
 			
 	# Rook or queen
 	for pos in _sliding_moves(king_pos, true, false, boards, is_white_turn):
 		if _is_piece_at(pos, boards[3 + 6 - color_offset]) || _is_piece_at(pos, boards[4 + 6 - color_offset]):
+			time_in_check += Time.get_ticks_msec() - start_time
 			return true
 			
 	# Bishop or queen
 	for pos in _sliding_moves(king_pos, false, true, boards, is_white_turn):
 		if _is_piece_at(pos, boards[2 + 6 - color_offset]) || _is_piece_at(pos, boards[4 + 6 - color_offset]):
+			time_in_check += Time.get_ticks_msec() - start_time
 			return true
 			
 	for pos in _king_moves(king_pos, boards, is_white_turn, false):
 		if _is_piece_at(pos, boards[5 + 6 - color_offset]):
+			time_in_check += Time.get_ticks_msec() - start_time
 			return true
 	
 	# Check attacking pawns
@@ -272,8 +283,10 @@ static func _is_check(boards : PackedInt64Array, is_white_turn : bool) -> bool:
 				continue
 			
 			if _is_piece_at(offset_file + offset_rank * 8, boards[6 - color_offset]):
+				time_in_check += Time.get_ticks_msec() - start_time
 				return true
-	
+				
+	time_in_check += Time.get_ticks_msec() - start_time
 	return false
 
 static func _boards_after_move(move : Move, boards : PackedInt64Array) -> PackedInt64Array:
@@ -607,17 +620,48 @@ static func _static_eval(boards : PackedInt64Array, is_white_turn : bool) -> flo
 	var sum : int = 0
 	
 	for piece in pieces:
-		sum += piece_values[piece % 6] * (1 if piece < 6 else -1)
+		sum += PIECE_VALUES[piece % 6] * (1 if piece < 6 else -1)
 		
 	return sum / 100.0
 
+# Sort moves for efficient alpha beta search
+static func _sort_moves(boards : PackedInt64Array, moves : Array[Move], last_best : Move, is_white_turn : bool) -> Array[Move]:
+	var moves_and_scores : Array
+	
+	var color_offset: int = 6 if is_white_turn else 0
+	for move in moves:
+		var scored : bool = false
+		if last_best != null && move.start_pos == last_best.start_pos && move.end_pos == last_best.end_pos:
+			moves_and_scores.append([move, 10000])
+			continue
+		for i in range(color_offset, color_offset + 6):
+			if _is_piece_at(move.end_pos, boards[i]):
+				var capture_value : int = PIECE_VALUES[i % 6]
+				var attacker_value : int = PIECE_VALUES[move.type % 6]
+				moves_and_scores.append([move, capture_value - attacker_value + 1000])
+				scored = true
+				break
+		if !scored:
+			moves_and_scores.append([move, 0])
+				
+	moves_and_scores.sort_custom(func(a, b): return a[1] > b[1])
+	var sorted_moves : Array[Move] = []
+	
+	for move in moves_and_scores:
+		sorted_moves.append(move[0])
+	
+	return sorted_moves
+
 # Negamax search
 static func _tree_search_eval(boards : PackedInt64Array, is_white_turn : bool, depth : int, alpha : float, beta : float, castle_rights : Array[bool]) -> float:
+	nodes_searched += 1
+	
 	if depth == 0:
 		# Static eval
 		return _static_eval(boards, is_white_turn) * (1 if is_white_turn else -1)
 	
 	var legal_moves : Array[Move] = _get_pseudo_legal_moves(boards, is_white_turn)
+	legal_moves = _sort_moves(boards, legal_moves, null, is_white_turn)
 	
 	var legal_move_found : bool = false
 	for move in legal_moves:
@@ -636,14 +680,14 @@ static func _tree_search_eval(boards : PackedInt64Array, is_white_turn : bool, d
 	
 	return alpha
 	
-
-static func find_best_move(boards : PackedInt64Array, is_white_turn : bool, depth : int, castle_rights : Array[bool]) -> Move:
+# Returns the best move and its eval
+static func _move_search(boards : PackedInt64Array, is_white_turn : bool, depth : int, castle_rights : Array[bool], last_best_move : Move) -> Array:
 	var legal_moves : Array[Move] = _get_pseudo_legal_moves(boards, is_white_turn)
 	
 	if legal_moves.size() == 0:
 		print("No moves available")
 		
-	var start_time : int = Time.get_ticks_usec()
+	legal_moves = _sort_moves(boards, legal_moves, last_best_move, is_white_turn)
 		
 	var max_eval : float = -INF
 	var alpha : float = -INF
@@ -660,12 +704,39 @@ static func find_best_move(boards : PackedInt64Array, is_white_turn : bool, dept
 			best_move = move
 		
 		alpha = max(alpha, eval)
+	
+	return [best_move, max_eval]
+
+static func find_best_move(boards : PackedInt64Array, is_white_turn : bool, search_ms : int, castle_rights : Array[bool]) -> Move:
+	nodes_searched = 0
+	max_depth_searched = 0
+	time_in_check = 0
+	
+	var start_ms : int = Time.get_ticks_msec()
+	var move : Move = null
+	var last_score : float = 0.0
+	
+	for i in range(1, MAX_DEPTH + 1):
+		max_depth_searched = i
+		var move_and_score : Array = _move_search(boards, is_white_turn, i, castle_rights, move)
+		move = move_and_score[0]
+		var score : float = move_and_score[1]
 		
-	var end_time : int = Time.get_ticks_usec()
-	print("Search took " + str((end_time - start_time) / 1000.0) + " ms")
+		if abs(last_score - score) < 0.1 && i > 1:
+			break
+		
+		if Time.get_ticks_msec() - start_ms >= search_ms:
+			break
+			
+		last_score = score
+		
+	print("Search took " + str(Time.get_ticks_msec() - start_ms) + "ms")
+	print("Of that, " + str(time_in_check) + " ms was spent on checking for checks")
+	print("Searched " + str(nodes_searched) + " nodes")
+	print("Searched to depth " + str(max_depth_searched))
 	
-	return best_move
-	
+	return move
+
 static func print_board(boards : PackedInt64Array) -> void:
 	var piece_chars = ["P","N","B","R","Q","K","p","n","b","r","q","k"]
 	for rank in range(7, -1, -1):

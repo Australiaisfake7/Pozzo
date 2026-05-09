@@ -23,8 +23,8 @@ anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
-size_flags_horizontal = 3
-size_flags_vertical = 3
+size_flags_horizontal = 4
+size_flags_vertical = 4
 stretch_mode = 1
 
 [node name="Board" parent="AspectRatioContainer" unique_id=544428359 instance=ExtResource("1_8gbba")]

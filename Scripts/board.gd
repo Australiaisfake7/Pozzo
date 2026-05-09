@@ -133,7 +133,7 @@ func _on_engine_finished(move : Move) -> void:
 		_make_move(move)
 
 func _run_engine(boards_copy : PackedInt64Array, is_white_turn : bool, depth : int, castle_rights : Array[bool]) -> void:
-	var move : Move = ChessEngine.find_best_move(boards_copy, is_white_turn, depth, castle_rights)
+	var move : Move = ChessEngine.find_best_move(boards_copy, is_white_turn, 2500, castle_rights)
 	
 	call_deferred("_on_engine_finished", move)
 
