@@ -3,10 +3,12 @@ class_name ChessEngine
 const PIECE_VALUES : PackedInt64Array = [120, 300, 340, 500, 900, 0]
 const MAX_DEPTH = 8
 
+static var _is_check_capture_boards : PackedInt64Array = [0,0,0,0,0,0,0,0,0,0,0,0]
+
 # Debug vars
-static var nodes_searched : int = 0
-static var max_depth_searched : int = 0
-static var time_in_check : int = 0
+static var _nodes_searched : int = 0
+static var _max_depth_searched : int = 0
+static var _time_in_check : int = 0
 
 class Ray:
 	enum {ROOK, BISHOP, KNIGHT, INVALID}
@@ -61,10 +63,6 @@ static func _is_piece_at(pos: int, board: int) -> bool:
 static func _pawn_moves(pos : int, boards : PackedInt64Array, is_white_move : bool) -> PackedInt64Array:
 	var moves : PackedInt64Array
 	var start_rank : int = 1	 if is_white_move else 6
-	
-	var white_board : int = boards[0] | boards[1] | boards[2] | boards[3] | boards[4] | boards[5]
-	var black_board : int = boards[6] | boards[7] | boards[8] | boards[9] | boards[10] | boards[11]
-	var all_board : int = white_board | black_board
 	
 	var file : int = pos % 8
 	var rank : int = pos / 8
@@ -248,24 +246,24 @@ static func _is_check(boards : PackedInt64Array, is_white_turn : bool) -> bool:
 
 	for pos in _knight_moves(king_pos, boards, is_white_turn):
 		if _is_piece_at(pos, boards[1 + 6 - color_offset]):
-			time_in_check += Time.get_ticks_msec() - start_time
+			_time_in_check += Time.get_ticks_msec() - start_time
 			return true
 			
 	# Rook or queen
 	for pos in _sliding_moves(king_pos, true, false, boards, is_white_turn):
 		if _is_piece_at(pos, boards[3 + 6 - color_offset]) || _is_piece_at(pos, boards[4 + 6 - color_offset]):
-			time_in_check += Time.get_ticks_msec() - start_time
+			_time_in_check += Time.get_ticks_msec() - start_time
 			return true
 			
 	# Bishop or queen
 	for pos in _sliding_moves(king_pos, false, true, boards, is_white_turn):
 		if _is_piece_at(pos, boards[2 + 6 - color_offset]) || _is_piece_at(pos, boards[4 + 6 - color_offset]):
-			time_in_check += Time.get_ticks_msec() - start_time
+			_time_in_check += Time.get_ticks_msec() - start_time
 			return true
 			
 	for pos in _king_moves(king_pos, boards, is_white_turn, false):
 		if _is_piece_at(pos, boards[5 + 6 - color_offset]):
-			time_in_check += Time.get_ticks_msec() - start_time
+			_time_in_check += Time.get_ticks_msec() - start_time
 			return true
 	
 	# Check attacking pawns
@@ -283,23 +281,26 @@ static func _is_check(boards : PackedInt64Array, is_white_turn : bool) -> bool:
 				continue
 			
 			if _is_piece_at(offset_file + offset_rank * 8, boards[6 - color_offset]):
-				time_in_check += Time.get_ticks_msec() - start_time
+				_time_in_check += Time.get_ticks_msec() - start_time
 				return true
 				
-	time_in_check += Time.get_ticks_msec() - start_time
+	_time_in_check += Time.get_ticks_msec() - start_time
 	return false
 
-static func _boards_after_move(move : Move, boards : PackedInt64Array) -> PackedInt64Array:
-	var new_boards : PackedInt64Array = boards.duplicate()
+# Mutates boards using move
+static func apply_move(move : int, boards : PackedInt64Array, capture_boards : PackedInt64Array) -> void:
 	for i in range(12):
-		new_boards[i] &= ~(1 << move.end_pos)
-	new_boards[move.type] ^= 1 << move.start_pos | 1 << move.end_pos
+		capture_boards[i] = 0
+		if boards[i] >> (move >> 6 & 63) & 1 == 1:
+			boards[i] &= ~(1 << (move >> 6 & 63))
+			capture_boards[i] |= 1 << (move >> 6 & 63)
+	boards[move >> 12 & 15] ^= 1 << (move & 63) | 1 << (move >> 6 & 63)
 	
 	if is_move_castle(move):
 		var rook_from : int
 		var rook_to : int
 		var is_white_move : bool
-		match move.end_pos:
+		match move >> 6 & 63:
 			6:  # White kingside
 				rook_from = 7
 				rook_to = 5
@@ -317,83 +318,116 @@ static func _boards_after_move(move : Move, boards : PackedInt64Array) -> Packed
 				rook_to = 59
 				is_white_move = false
 				
-		new_boards[3 if is_white_move else 9] ^= 1 << rook_from | 1 << rook_to
+		boards[3 if is_white_move else 9] ^= 1 << rook_from | 1 << rook_to
+
+# Unmutates boards
+static func _unapply_move(move : int, boards : PackedInt64Array, capture_boards : PackedInt64Array) -> void:
+	boards[move >> 12 & 15] ^= 1 << (move & 63) | 1 << (move >> 6 & 63)
 	
-	return new_boards
-
-static func _does_move_cause_check(move : Move, boards : PackedInt64Array, is_white_turn : bool):
+	for i in range(12):
+		if capture_boards[i] >> (move >> 6 & 63) & 1 == 1:
+			boards[i] |= 1 << (move >> 6 & 63)
+		capture_boards[i] = 0
+	
+	if is_move_castle(move):
+		var rook_from : int
+		var rook_to : int
+		var is_white_move : bool
+		match move >> 6 & 63:
+			6:  # White kingside
+				rook_from = 7
+				rook_to = 5
+				is_white_move = true
+			2:  # White queenside
+				rook_from = 0
+				rook_to = 3
+				is_white_move = true
+			62: # Black kingside
+				rook_from = 63
+				rook_to = 61
+				is_white_move = false
+			58: # Black queenside
+				rook_from = 56
+				rook_to = 59
+				is_white_move = false
+				
+		boards[3 if is_white_move else 9] ^= 1 << rook_from | 1 << rook_to
+		
+static func _does_move_cause_check(move : int, boards : PackedInt64Array, is_white_turn : bool) -> bool:
 	# Check if new board is legal
-	var new_boards : PackedInt64Array = _boards_after_move(move, boards)
-	return _is_check(new_boards, is_white_turn)
+	apply_move(move, boards, _is_check_capture_boards)
+	var result : bool = _is_check(boards, is_white_turn)
+	_unapply_move(move, boards, _is_check_capture_boards)
+	return result
 
-static func _is_pawn_move_legal(move : Move, boards : PackedInt64Array, is_white_move : bool):		
+static func _is_pawn_move_legal(move : int, boards : PackedInt64Array, is_white_move : bool):		
 	var direction : int = 1 if is_white_move else -1
-	var start_rank : int = move.start_pos / 8
-	var end_rank : int = move.end_pos / 8
-	var start_file : int = move.start_pos % 8
-	var end_file : int = move.end_pos % 8
+	var start_rank : int = (move & 63) / 8
+	var end_rank : int = (move >> 6 & 63) / 8
+	var start_file : int = (move & 63) % 8
+	var end_file : int = (move >> 6 & 63) % 8
 	var rank_diff : int = (end_rank - start_rank) * direction
 	var file_diff : int = abs(end_file - start_file)		
 	
 	if rank_diff == 1:
-		if file_diff == 0 && !_is_occupied(move.end_pos, boards, true, true):
+		if file_diff == 0 && !_is_occupied(move >> 6 & 63, boards, true, true):
 			return true
 		elif file_diff == 1:
-			return _is_occupied(move.end_pos, boards, !is_white_move, is_white_move)
+			return _is_occupied(move >> 6 & 63, boards, !is_white_move, is_white_move)
 		else:
 			return false
-	elif rank_diff == 2 && file_diff == 0 && start_rank == (1 if is_white_move else 6) && !_is_occupied(move.start_pos + 8 * direction, boards, true, true) && !_is_occupied(move.end_pos, boards, true, true):
+	elif rank_diff == 2 && file_diff == 0 && start_rank == (1 if is_white_move else 6) && !_is_occupied((move & 63) + 8 * direction, boards, true, true) && !_is_occupied(move >> 6 & 63, boards, true, true):
 		return true
 	else:
 		return false
 
-static func _is_castle_move_legal(move : Move, boards : PackedInt64Array, castle_rights : Array[bool], is_white_move : bool) -> bool:
-	var vec_diff : Vector2i = move.vec_difference()
+static func _is_castle_move_legal(move : int, boards : PackedInt64Array, castle_rights : Array[bool], is_white_move : bool) -> bool:
+	var file_diff : int = Move.file_diff(move)
 	
-	if vec_diff == Vector2i(2, 0):
+	if file_diff == 2:
 		# Castled kingside
 		if !(castle_rights[0] if is_white_move else castle_rights[2]):
 			return false
 		
-		if _is_occupied(move.start_pos + 1, boards, true, true) || _is_occupied(move.end_pos, boards, true, true):
+		if _is_occupied((move & 63) + 1, boards, true, true) || _is_occupied(move >> 6 & 63, boards, true, true):
 			return false
 		
-		if _is_check(boards, is_white_move) || _does_move_cause_check(Move.new(move.start_pos, move.start_pos + 1, 5 if is_white_move else 11), boards, is_white_move) || _does_move_cause_check(Move.new(move.start_pos, move.end_pos, 5 if is_white_move else 11), boards, is_white_move):
+		if _is_check(boards, is_white_move) || _does_move_cause_check(Move.create(move & 63, (move & 63) + 1, 5 if is_white_move else 11), boards, is_white_move) || _does_move_cause_check(Move.create(move & 63, move >> 6 & 63, 5 if is_white_move else 11), boards, is_white_move):
 			return false
-	elif vec_diff == Vector2i(-2, 0):
+	elif file_diff == -2:
 		# Castled queenside
 		if !(castle_rights[1] if is_white_move else castle_rights[3]):
 			return false
 		
-		if _is_occupied(move.end_pos - 1, boards, true, true) || _is_occupied(move.end_pos, boards, true, true) || _is_occupied(move.end_pos + 1, boards, true, true):
+		if _is_occupied((move >> 6 & 63) - 1, boards, true, true) || _is_occupied(move >> 6 & 63, boards, true, true) || _is_occupied((move >> 6 & 63) + 1, boards, true, true):
 			return false
 		
-		if _is_check(boards, is_white_move) || _does_move_cause_check(Move.new(move.start_pos, move.start_pos - 1, 5 if is_white_move else 11), boards, is_white_move) || _does_move_cause_check(Move.new(move.start_pos, move.end_pos, 5 if is_white_move else 11), boards, is_white_move):
+		if _is_check(boards, is_white_move) || _does_move_cause_check(Move.create(move & 63, (move & 63) - 1, 5 if is_white_move else 11), boards, is_white_move) || _does_move_cause_check(Move.create(move & 63, move >> 6 & 63, 5 if is_white_move else 11), boards, is_white_move):
 			return false
 	else:
 		return false
 	return true
 
-static func is_move_castle(move : Move) -> bool:
-	if (move.type == 5 || move.type == 11):
-			var vec_difference = move.vec_difference()
-			if vec_difference.abs() == Vector2i(2, 0):
+static func is_move_castle(move : int) -> bool:
+	if (move >> 12 & 15 == 5 || move >> 12 & 15 == 11):
+			var file_diff : int = Move.file_diff(move)
+			if absi(file_diff) == 2:
 				return true
 	return false
 
-static func is_move_legal(move : Move, boards : PackedInt64Array, castle_rights : Array[bool], is_white_turn : bool) -> bool:
-	print("--- Checking move: %d -> %d (type %d) ---" % [move.start_pos, move.end_pos, move.type])
+static func is_move_legal(move : int, boards : PackedInt64Array, castle_rights : Array[bool], is_white_turn : bool) -> bool:
+	print("--- Checking move: %d -> %d (type %d) ---" % [move & 63, move >> 6 & 63, move >> 12 & 15])
 	
-	if move.end_pos < 0 || move.end_pos >= 64:
+	if move >> 6 & 63 < 0 || move >> 6 & 63 >= 64:
 		print("REJECTED: outside of board")
 		return false
 	
-	if move.start_pos == move.end_pos:
+	if (move & 63) == move >> 6 & 63:
 		print("REJECTED: same square")
 		return false
 		
 	# Types 0–5 are white pieces
-	var is_white_move : bool = true if move.type <= 5 else false
+	var is_white_move : bool = true if move >> 12 & 15 <= 5 else false
 	
 	if is_white_move != is_white_turn:
 		print("REJECTED: wrong turn")
@@ -402,11 +436,11 @@ static func is_move_legal(move : Move, boards : PackedInt64Array, castle_rights 
 	var white_board : int = boards[0] | boards[1] | boards[2] | boards[3] | boards[4] | boards[5]
 	var black_board : int = boards[6] | boards[7] | boards[8] | boards[9] | boards[10] | boards[11]
 	
-	if is_white_move && _is_occupied(move.end_pos, boards, true, false) || !is_white_move && _is_occupied(move.end_pos, boards, false, true):
+	if is_white_move && _is_occupied(move >> 6 & 63, boards, true, false) || !is_white_move && _is_occupied(move >> 6 & 63, boards, false, true):
 		print("REJECTED: destination occupied by friendly")
 		return false
 		
-	if move.type == 0 || move.type == 6:
+	if move >> 12 & 15 == 0 || move >> 12 & 15 == 6:
 		# Is pawn move
 		if _is_pawn_move_legal(move, boards, is_white_move):
 			if _does_move_cause_check(move, boards, is_white_turn):
@@ -417,14 +451,14 @@ static func is_move_legal(move : Move, boards : PackedInt64Array, castle_rights 
 			print("REJECTED: illegal pawn move")
 			return false
 	
-	var ray : Ray = _compute_ray(move.start_pos, move.end_pos)
+	var ray : Ray = _compute_ray(move & 63, move >> 6 & 63)
 	
 	if ray.type == Ray.INVALID:
-		print("REJECTED: invalid ray between %d and %d" % [move.start_pos, move.end_pos])
+		print("REJECTED: invalid ray between %d and %d" % [move & 63, move >> 6 & 63])
 		return false
 		
 	if ray.type == Ray.KNIGHT:
-		if move.type != 1 && move.type != 7:
+		if move >> 12 & 15 != 1 && move >> 12 & 15 != 7:
 			print("REJECTED: piece cannot make knight move")
 			return false
 		if _does_move_cause_check(move, boards, is_white_turn):
@@ -433,7 +467,7 @@ static func is_move_legal(move : Move, boards : PackedInt64Array, castle_rights 
 		return true
 		
 	if ray.type == Ray.ROOK:
-		if move.type != 3 && move.type != 9 && move.type != 4 && move.type != 10 && move.type != 5 && move.type != 11:
+		if move >> 12 & 15 != 3 && move >> 12 & 15 != 9 && move >> 12 & 15 != 4 && move >> 12 & 15 != 10 && move >> 12 & 15 != 5 && move >> 12 & 15 != 11:
 			print("REJECTED: piece cannot make rook move")
 			return false
 			
@@ -442,10 +476,10 @@ static func is_move_legal(move : Move, boards : PackedInt64Array, castle_rights 
 			print("REJECTED: ray is blocked. Blocking mask: %d" % [ray.ray & (white_board | black_board)])
 			return false
 			
-		if (move.type == 5 || move.type == 11):
+		if (move >> 12 & 15 == 5 || move >> 12 & 15 == 11):
 			if is_move_castle(move):
 				return _is_castle_move_legal(move, boards, castle_rights, is_white_move)
-			return move.tile_length() == 1 && !_does_move_cause_check(move, boards, is_white_turn)
+			return Move.tile_length(move) == 1 && !_does_move_cause_check(move, boards, is_white_turn)
 			
 		if _does_move_cause_check(move, boards, is_white_turn):
 			print("REJECTED: move leaves king in check")
@@ -453,7 +487,7 @@ static func is_move_legal(move : Move, boards : PackedInt64Array, castle_rights 
 		return true
 		
 	if ray.type == Ray.BISHOP:
-		if move.type != 2 && move.type != 8 && move.type != 4 && move.type != 10 && move.type != 5 && move.type != 11:
+		if move >> 12 & 15 != 2 && move >> 12 & 15 != 8 && move >> 12 & 15 != 4 && move >> 12 & 15 != 10 && move >> 12 & 15 != 5 && move >> 12 & 15 != 11:
 			print("REJECTED: piece cannot make bishop move")
 			return false
 			
@@ -462,8 +496,8 @@ static func is_move_legal(move : Move, boards : PackedInt64Array, castle_rights 
 			print("REJECTED: ray is blocked. Blocking mask: %d" % [ray.ray & (white_board | black_board)])
 			return false
 		
-		if (move.type == 5 || move.type == 11):
-			if move.tile_length() == 1:
+		if (move >> 12 & 15 == 5 || move >> 12 & 15 == 11):
+			if Move.tile_length(move) == 1:
 				if _does_move_cause_check(move, boards, is_white_turn):
 					print("REJECTED: move leaves king in check")
 					return false
@@ -478,15 +512,15 @@ static func is_move_legal(move : Move, boards : PackedInt64Array, castle_rights 
 			
 	return false
 	
-static func _is_generated_move_legal(move : Move, boards : PackedInt64Array, is_white_turn : bool, castle_rights : Array[bool]) -> bool:
-	if move.end_pos < 0 || move.end_pos >= 64:
+static func _is_generated_move_legal(move : int, boards : PackedInt64Array, is_white_turn : bool, castle_rights : Array[bool]) -> bool:
+	if move >> 6 & 63 < 0 || move >> 6 & 63 >= 64:
 		return false
 	
-	if move.start_pos == move.end_pos:
+	if (move & 63) == move >> 6 & 63:
 		return false
 		
 	# Types 0–5 are white pieces
-	var is_white_move : bool = true if move.type <= 5 else false
+	var is_white_move : bool = true if move >> 12 & 15 <= 5 else false
 	
 	if is_white_move != is_white_turn:
 		return false
@@ -494,53 +528,53 @@ static func _is_generated_move_legal(move : Move, boards : PackedInt64Array, is_
 	var white_board : int = boards[0] | boards[1] | boards[2] | boards[3] | boards[4] | boards[5]
 	var black_board : int = boards[6] | boards[7] | boards[8] | boards[9] | boards[10] | boards[11]
 	
-	if is_white_move && _is_occupied(move.end_pos, boards, true, false) || !is_white_move && _is_occupied(move.end_pos, boards, false, true):
+	if is_white_move && _is_occupied(move >> 6 & 63, boards, true, false) || !is_white_move && _is_occupied(move >> 6 & 63, boards, false, true):
 		return false
 		
-	if move.type == 0 || move.type == 6:
+	if move >> 12 & 15 == 0 || move >> 12 & 15 == 6:
 		if _does_move_cause_check(move, boards, is_white_turn):
 			return false
 		return true
 	
-	var ray : Ray = _compute_ray(move.start_pos, move.end_pos)
+	var ray : Ray = _compute_ray(move & 63, move >> 6 & 63)
 	
 	if ray.type == Ray.INVALID:
 		return false
 		
 	if ray.type == Ray.KNIGHT:
-		if move.type != 1 && move.type != 7:
+		if move >> 12 & 15 != 1 && move >> 12 & 15 != 7:
 			return false
 		if _does_move_cause_check(move, boards, is_white_turn):
 			return false
 		return true
 		
 	if ray.type == Ray.ROOK:
-		if move.type != 3 && move.type != 9 && move.type != 4 && move.type != 10 && move.type != 5 && move.type != 11:
+		if move >> 12 & 15 != 3 && move >> 12 & 15 != 9 && move >> 12 & 15 != 4 && move >> 12 & 15 != 10 && move >> 12 & 15 != 5 && move >> 12 & 15 != 11:
 			return false
 			
 		# Check for blocking piece
 		if ray.ray & (white_board | black_board) != 0:
 			return false
 			
-		if (move.type == 5 || move.type == 11):
+		if (move >> 12 & 15 == 5 || move >> 12 & 15 == 11):
 			if is_move_castle(move):
 				return _is_castle_move_legal(move, boards, castle_rights, is_white_move)
-			return move.tile_length() == 1 && !_does_move_cause_check(move, boards, is_white_turn)
+			return Move.tile_length(move) == 1 && !_does_move_cause_check(move, boards, is_white_turn)
 			
 		if _does_move_cause_check(move, boards, is_white_turn):
 			return false
 		return true
 		
 	if ray.type == Ray.BISHOP:
-		if move.type != 2 && move.type != 8 && move.type != 4 && move.type != 10 && move.type != 5 && move.type != 11:
+		if move >> 12 & 15 != 2 && move >> 12 & 15 != 8 && move >> 12 & 15 != 4 && move >> 12 & 15 != 10 && move >> 12 & 15 != 5 && move >> 12 & 15 != 11:
 			return false
 			
 		# Check for blocking piece
 		if ray.ray & (white_board | black_board) != 0:
 			return false
 		
-		if (move.type == 5 || move.type == 11):
-			if move.tile_length() == 1:
+		if (move >> 12 & 15 == 5 || move >> 12 & 15 == 11):
+			if Move.tile_length(move) == 1:
 				if _does_move_cause_check(move, boards, is_white_turn):
 					return false
 				return true
@@ -552,9 +586,9 @@ static func _is_generated_move_legal(move : Move, boards : PackedInt64Array, is_
 			
 	return false
 
-static func _get_pseudo_legal_moves(boards : PackedInt64Array, is_white_turn : bool) -> Array[Move]:
+static func _get_pseudo_legal_moves(boards : PackedInt64Array, is_white_turn : bool) -> PackedInt64Array:
 	var color_offset : int = 0 if is_white_turn else 6
-	var moves : Array[Move]
+	var moves : PackedInt64Array
 	
 	for type in range(color_offset, color_offset + 6):
 		for i in range(64):
@@ -570,7 +604,7 @@ static func _get_pseudo_legal_moves(boards : PackedInt64Array, is_white_turn : b
 				5: move_targets = _king_moves(i, boards, is_white_turn, true)
 				
 			for pos in move_targets:
-				var move : Move = Move.new(i, pos, type)
+				var move : int = Move.create(i, pos, type)
 				moves.append(move)
 				
 	return moves
@@ -595,10 +629,10 @@ static func _get_all_piece_counts(boards : PackedInt64Array) -> PackedInt64Array
 					
 	return pieces
 	
-static func _get_updated_castle_rights(move: Move, castle_rights: Array[bool]) -> Array[bool]:
+static func get_updated_castle_rights(move : int, castle_rights: Array[bool]) -> Array[bool]:
 	var new_rights : Array[bool] = castle_rights.duplicate()
 	
-	match move.start_pos:
+	match move & 63:
 		4:  new_rights[0] = false; new_rights[1] = false # White king
 		0:  new_rights[1] = false
 		7:  new_rights[0] = false
@@ -606,7 +640,7 @@ static func _get_updated_castle_rights(move: Move, castle_rights: Array[bool]) -
 		56: new_rights[3] = false
 		63: new_rights[2] = false
 
-	match move.end_pos:
+	match move >> 6 & 63:
 		0:  new_rights[1] = false
 		7:  new_rights[0] = false
 		56: new_rights[3] = false
@@ -625,19 +659,19 @@ static func _static_eval(boards : PackedInt64Array, is_white_turn : bool) -> flo
 	return sum / 100.0
 
 # Sort moves for efficient alpha beta search
-static func _sort_moves(boards : PackedInt64Array, moves : Array[Move], last_best : Move, is_white_turn : bool) -> Array[Move]:
+static func _sort_moves(boards : PackedInt64Array, moves : PackedInt64Array, last_best : int, is_white_turn : bool) -> PackedInt64Array:
 	var moves_and_scores : Array
 	
 	var color_offset: int = 6 if is_white_turn else 0
 	for move in moves:
 		var scored : bool = false
-		if last_best != null && move.start_pos == last_best.start_pos && move.end_pos == last_best.end_pos:
+		if last_best != -1 && move == last_best:
 			moves_and_scores.append([move, 10000])
 			continue
 		for i in range(color_offset, color_offset + 6):
-			if _is_piece_at(move.end_pos, boards[i]):
+			if _is_piece_at(move >> 6 & 63, boards[i]):
 				var capture_value : int = PIECE_VALUES[i % 6]
-				var attacker_value : int = PIECE_VALUES[move.type % 6]
+				var attacker_value : int = PIECE_VALUES[(move >> 12 & 15) % 6]
 				moves_and_scores.append([move, capture_value - attacker_value + 1000])
 				scored = true
 				break
@@ -645,7 +679,7 @@ static func _sort_moves(boards : PackedInt64Array, moves : Array[Move], last_bes
 			moves_and_scores.append([move, 0])
 				
 	moves_and_scores.sort_custom(func(a, b): return a[1] > b[1])
-	var sorted_moves : Array[Move] = []
+	var sorted_moves : PackedInt64Array = []
 	
 	for move in moves_and_scores:
 		sorted_moves.append(move[0])
@@ -653,22 +687,25 @@ static func _sort_moves(boards : PackedInt64Array, moves : Array[Move], last_bes
 	return sorted_moves
 
 # Negamax search
-static func _tree_search_eval(boards : PackedInt64Array, is_white_turn : bool, depth : int, alpha : float, beta : float, castle_rights : Array[bool]) -> float:
-	nodes_searched += 1
+static func _tree_search_eval(boards : PackedInt64Array, is_white_turn : bool, depth : int, alpha : float, beta : float, castle_rights : Array[bool], capture_stack : Array[PackedInt64Array]) -> float:
+	_nodes_searched += 1
 	
 	if depth == 0:
 		# Static eval
 		return _static_eval(boards, is_white_turn) * (1 if is_white_turn else -1)
 	
-	var legal_moves : Array[Move] = _get_pseudo_legal_moves(boards, is_white_turn)
-	legal_moves = _sort_moves(boards, legal_moves, null, is_white_turn)
+	var legal_moves : PackedInt64Array = _get_pseudo_legal_moves(boards, is_white_turn)
+	legal_moves = _sort_moves(boards, legal_moves, -1, is_white_turn)
 	
 	var legal_move_found : bool = false
 	for move in legal_moves:
 		if !_is_generated_move_legal(move, boards, is_white_turn, castle_rights):
 			continue
 		legal_move_found = true
-		alpha = max(alpha, -_tree_search_eval(_boards_after_move(move, boards), !is_white_turn, depth - 1, -beta, -alpha, _get_updated_castle_rights(move, castle_rights)))
+		
+		apply_move(move, boards, capture_stack[depth])
+		alpha = max(alpha, -_tree_search_eval(boards, !is_white_turn, depth - 1, -beta, -alpha, get_updated_castle_rights(move, castle_rights), capture_stack))
+		_unapply_move(move, boards, capture_stack[depth])
 		
 		if alpha >= beta:
 			break
@@ -681,8 +718,8 @@ static func _tree_search_eval(boards : PackedInt64Array, is_white_turn : bool, d
 	return alpha
 	
 # Returns the best move and its eval
-static func _move_search(boards : PackedInt64Array, is_white_turn : bool, depth : int, castle_rights : Array[bool], last_best_move : Move) -> Array:
-	var legal_moves : Array[Move] = _get_pseudo_legal_moves(boards, is_white_turn)
+static func _move_search(boards : PackedInt64Array, is_white_turn : bool, depth : int, castle_rights : Array[bool], last_best_move : int) -> Array:
+	var legal_moves : PackedInt64Array = _get_pseudo_legal_moves(boards, is_white_turn)
 	
 	if legal_moves.size() == 0:
 		print("No moves available")
@@ -692,13 +729,23 @@ static func _move_search(boards : PackedInt64Array, is_white_turn : bool, depth 
 	var max_eval : float = -INF
 	var alpha : float = -INF
 	var beta : float = INF
-	var best_move : Move
+	var best_move : int
+	
+	var capture_stack : Array[PackedInt64Array] = []
+	capture_stack.resize(MAX_DEPTH + 1)
+	
+	for i in range(MAX_DEPTH + 1):
+		capture_stack[i] = PackedInt64Array()
+		capture_stack[i].resize(12)
 	
 	for move in legal_moves:
 		if !_is_generated_move_legal(move, boards, is_white_turn, castle_rights):
 			continue
 		
-		var eval : float = -_tree_search_eval(_boards_after_move(move, boards), !is_white_turn, depth - 1, -beta, -alpha, _get_updated_castle_rights(move, castle_rights))
+		apply_move(move, boards, capture_stack[depth])
+		var eval : float = -_tree_search_eval(boards, !is_white_turn, depth - 1, -beta, -alpha, get_updated_castle_rights(move, castle_rights), capture_stack)
+		_unapply_move(move, boards, capture_stack[depth])
+		
 		if eval > max_eval:
 			max_eval = eval
 			best_move = move
@@ -707,33 +754,30 @@ static func _move_search(boards : PackedInt64Array, is_white_turn : bool, depth 
 	
 	return [best_move, max_eval]
 
-static func find_best_move(boards : PackedInt64Array, is_white_turn : bool, search_ms : int, castle_rights : Array[bool]) -> Move:
-	nodes_searched = 0
-	max_depth_searched = 0
-	time_in_check = 0
+static func find_best_move(boards : PackedInt64Array, is_white_turn : bool, search_ms : int, castle_rights : Array[bool]) -> int:
+	_nodes_searched = 0
+	_max_depth_searched = 0
+	_time_in_check = 0
 	
 	var start_ms : int = Time.get_ticks_msec()
-	var move : Move = null
-	var last_score : float = 0.0
+	var move : int = -1
 	
 	for i in range(1, MAX_DEPTH + 1):
-		max_depth_searched = i
+		_max_depth_searched = i
 		var move_and_score : Array = _move_search(boards, is_white_turn, i, castle_rights, move)
 		move = move_and_score[0]
 		var score : float = move_and_score[1]
 		
-		if abs(last_score - score) < 0.1 && i > 1:
+		if abs(score) > 900.0:
 			break
 		
 		if Time.get_ticks_msec() - start_ms >= search_ms:
 			break
-			
-		last_score = score
 		
 	print("Search took " + str(Time.get_ticks_msec() - start_ms) + "ms")
-	print("Of that, " + str(time_in_check) + " ms was spent on checking for checks")
-	print("Searched " + str(nodes_searched) + " nodes")
-	print("Searched to depth " + str(max_depth_searched))
+	print("Of that, " + str(_time_in_check) + " ms was spent on checking for checks")
+	print("Searched " + str(_nodes_searched) + " nodes")
+	print("Searched to depth " + str(_max_depth_searched))
 	
 	return move
 

@@ -1,31 +1,25 @@
 class_name Move
 
-var start_pos : int:
-	set(value):
-		start_pos = clampi(value, 0, 63)
+static func create(start_pos : int, end_pos : int, type : int) -> int:
+	if start_pos > 63 || start_pos < 0 || end_pos > 63 || end_pos < 0 || type > 11 || type < 0:
+		print("ERROR: incorrect values for move constructor")
+	return start_pos | (end_pos << 6) | (type << 12)
 
-var end_pos : int:
-	set(value):
-		end_pos = clampi(value, 0, 63)
+static func file_diff(move : int) -> int:
+	var start_file : int = (move & 63) % 8
+	var end_file : int = (move >> 6 & 63) % 8
+	
+	return end_file - start_file
 
-var type : int:
-	set(value):
-		type = clampi(value, 0, 11)
-
-func _init(start_pos : int, end_pos : int, type : int) -> void:
-	self.start_pos = start_pos
-	self.end_pos = end_pos
-	self.type = type
+# The length of the move in tiles
+static func tile_length(move : int) -> int:
+	var start_pos : int = move & 63
+	var end_pos : int = move >> 6 & 63
 	
-			
-func vec_difference() -> Vector2i:
-	var start_aligned_pos : Vector2i = Vector2i(start_pos % 8, floori(start_pos / 8.0))
-	var end_aligned_pos : Vector2i = Vector2i(end_pos % 8, floori(end_pos / 8.0))
+	var start_file : int = start_pos % 8
+	var start_rank : int = start_pos / 8
 	
-	return end_aligned_pos - start_aligned_pos
-
-func tile_length() -> int:
-	var vec_diff : Vector2i = vec_difference()
+	var end_file : int = end_pos % 8
+	var end_rank : int = end_pos / 8
 	
-	return max(absi(vec_diff.x), absi(vec_diff.y))
-	
+	return maxi(absi(end_file - start_file), absi(end_rank - start_rank))

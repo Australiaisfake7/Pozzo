@@ -58,13 +58,13 @@ func _instantiate_pieces() -> void:
 			if (boards[i] >> j) & 1 == 1:
 				_instantiate_piece(textures[i], _grid_pos_to_board_pos(j), i)
 
-func _make_move(move : Move) -> void:
+func _make_move(move : int) -> void:
 	if ChessEngine.is_move_legal(move, boards, castle_rights, is_white_turn):
 		# Move rook piece if move was castling
 		if ChessEngine.is_move_castle(move):
 			var rook_from : int
 			var rook_to : int
-			match move.end_pos:
+			match move >> 6 & 63:
 				6:  # White kingside
 					rook_from = 7
 					rook_to = 5
@@ -79,61 +79,29 @@ func _make_move(move : Move) -> void:
 					rook_to = 59
 					
 			move_piece.emit(_grid_pos_to_board_pos(rook_from), _grid_pos_to_board_pos(rook_to))
-			if is_white_turn:
-				boards[3] ^= (1 << rook_from | 1 << rook_to)
-			else:
-				boards[9] ^= (1 << rook_from | 1 << rook_to)
-				
-		delete_piece.emit(_grid_pos_to_board_pos(move.end_pos))
+		delete_piece.emit(_grid_pos_to_board_pos(move >> 6 & 63))
+		move_piece.emit(_grid_pos_to_board_pos(move & 63), _grid_pos_to_board_pos(move >> 6 & 63))
 		
-		# Update bitboards
-		for i in range(12):
-			boards[i] = boards[i] & ~(1 << move.end_pos)
-		boards[move.type] = boards[move.type] ^ (1 << move.start_pos | 1 << move.end_pos)
-		
-		match move.start_pos:
-			4:  # White king
-				castle_rights[0] = false
-				castle_rights[1] = false
-			0:  # White queenside rook
-				castle_rights[1] = false
-			7:  # White kingside rook
-				castle_rights[0] = false
-			60: # Black king
-				castle_rights[2] = false
-				castle_rights[3] = false
-			56: # Black queenside rook
-				castle_rights[3] = false
-			63: # Black kingside rook
-				castle_rights[2] = false
-
-		# Revoke rights if a rook is captured on its starting square
-		match move.end_pos:
-			0:  castle_rights[1] = false
-			7:  castle_rights[0] = false
-			56: castle_rights[2] = false
-			63: castle_rights[3] = false
-		
-		move_piece.emit(_grid_pos_to_board_pos(move.start_pos), _grid_pos_to_board_pos(move.end_pos))
+		ChessEngine.apply_move(move, boards, PackedInt64Array([0,0,0,0,0,0,0,0,0,0,0,0]))
+		castle_rights = ChessEngine.get_updated_castle_rights(move, castle_rights)
 		
 		# Change turn
 		is_white_turn = !is_white_turn
 		if is_white_turn != is_white_player:
 			_start_engine(boards.duplicate(), is_white_turn, 4)
 	else:
-		move_piece.emit(_grid_pos_to_board_pos(move.start_pos), _grid_pos_to_board_pos(move.start_pos))
-	ChessEngine.print_board(boards)
+		move_piece.emit(_grid_pos_to_board_pos(move & 63), _grid_pos_to_board_pos(move & 63))
 
-func _on_engine_finished(move : Move) -> void:
+func _on_engine_finished(move : int) -> void:
 	is_engine_thinking = false
 	if engine_thread and engine_thread.is_started():
 		engine_thread.wait_to_finish()
 		
-	if move != null:
+	if move != -1:
 		_make_move(move)
 
 func _run_engine(boards_copy : PackedInt64Array, is_white_turn : bool, depth : int, castle_rights : Array[bool]) -> void:
-	var move : Move = ChessEngine.find_best_move(boards_copy, is_white_turn, 2500, castle_rights)
+	var move : int = ChessEngine.find_best_move(boards_copy, is_white_turn, 2500, castle_rights)
 	
 	call_deferred("_on_engine_finished", move)
 
@@ -147,7 +115,6 @@ func _start_engine(boards_copy : PackedInt64Array, is_white_turn : bool, depth :
 func _ready() -> void:
 	await get_tree().process_frame
 	_instantiate_pieces()
-	ChessEngine.print_board(boards)
 	
 	if !is_white_player:
 		_start_engine(boards.duplicate(), is_white_turn, 4)
@@ -157,10 +124,10 @@ func _on_picked(pos : Vector2, piece : Piece) -> void:
 
 func _on_placed(pos : Vector2, last_pos : Vector2, piece_type : int) -> void:
 	if is_engine_thinking:
-		var move : Move = Move.new(_board_pos_to_grid_pos(last_pos), _board_pos_to_grid_pos(last_pos), piece_type)
-		_make_move(move)
+		move_piece.emit(_grid_pos_to_board_pos(_board_pos_to_grid_pos(last_pos)), _grid_pos_to_board_pos(_board_pos_to_grid_pos(last_pos)))
+		return
 	else:
-		var move : Move = Move.new(_board_pos_to_grid_pos(last_pos), _board_pos_to_grid_pos(pos), piece_type)
+		var move : int = Move.create(_board_pos_to_grid_pos(last_pos), _board_pos_to_grid_pos(pos), piece_type)
 		_make_move(move)
 		
 func _exit_tree() -> void:
