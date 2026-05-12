@@ -10,7 +10,7 @@ var boards : PackedInt64Array = [65280, 66, 36, 129, 8, 16, 71776119061217280, 4
 var is_white_turn : bool = true
 var is_white_player : bool = true
 
-var castle_rights : Array[bool] = [true, true, true, true]
+var castle_rights : int = 15
 
 var engine_thread : Thread
 var is_engine_thinking : bool
@@ -62,23 +62,9 @@ func _make_move(move : int) -> void:
 	if ChessEngine.is_move_legal(move, boards, castle_rights, is_white_turn):
 		# Move rook piece if move was castling
 		if ChessEngine.is_move_castle(move):
-			var rook_from : int
-			var rook_to : int
-			match move >> 6 & 63:
-				6:  # White kingside
-					rook_from = 7
-					rook_to = 5
-				2:  # White queenside
-					rook_from = 0
-					rook_to = 3
-				62: # Black kingside
-					rook_from = 63
-					rook_to = 61
-				58: # Black queenside
-					rook_from = 56
-					rook_to = 59
+			var rook_move : int = ChessEngine.get_castle_rook_move(move)
 					
-			move_piece.emit(_grid_pos_to_board_pos(rook_from), _grid_pos_to_board_pos(rook_to))
+			move_piece.emit(_grid_pos_to_board_pos(rook_move & 63), _grid_pos_to_board_pos(rook_move >> 6 & 63))
 		delete_piece.emit(_grid_pos_to_board_pos(move >> 6 & 63))
 		move_piece.emit(_grid_pos_to_board_pos(move & 63), _grid_pos_to_board_pos(move >> 6 & 63))
 		
@@ -100,7 +86,7 @@ func _on_engine_finished(move : int) -> void:
 	if move != -1:
 		_make_move(move)
 
-func _run_engine(boards_copy : PackedInt64Array, is_white_turn : bool, depth : int, castle_rights : Array[bool]) -> void:
+func _run_engine(boards_copy : PackedInt64Array, is_white_turn : bool, depth : int, castle_rights : int) -> void:
 	var move : int = ChessEngine.find_best_move(boards_copy, is_white_turn, 2500, castle_rights)
 	
 	call_deferred("_on_engine_finished", move)
@@ -110,11 +96,12 @@ func _start_engine(boards_copy : PackedInt64Array, is_white_turn : bool, depth :
 		return
 	is_engine_thinking = true
 	engine_thread = Thread.new()
-	engine_thread.start(_run_engine.bind(boards_copy, is_white_turn, depth, castle_rights.duplicate()))
+	engine_thread.start(_run_engine.bind(boards_copy, is_white_turn, depth, castle_rights))
 
 func _ready() -> void:
 	await get_tree().process_frame
 	_instantiate_pieces()
+	ChessEngine.init()
 	
 	if !is_white_player:
 		_start_engine(boards.duplicate(), is_white_turn, 4)

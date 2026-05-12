@@ -5,10 +5,13 @@ const MAX_DEPTH = 8
 
 static var _is_check_capture_boards : PackedInt64Array = [0,0,0,0,0,0,0,0,0,0,0,0]
 
+static var rng : SplitMix64
+static var zobrist_values : PackedInt64Array
+static var transposition_table : Dictionary
+
 # Debug vars
 static var _nodes_searched : int = 0
 static var _max_depth_searched : int = 0
-static var _time_in_check : int = 0
 
 class Ray:
 	enum {ROOK, BISHOP, KNIGHT, INVALID}
@@ -19,6 +22,10 @@ class Ray:
 	func _init(ray : int, type : int) -> void:
 		self.ray = ray
 		self.type = type
+
+static func init():
+	rng = SplitMix64.new()
+	zobrist_values = _compute_zobrist_values(rng)
 
 static func _compute_ray(start_pos : int, end_pos : int) -> Ray:
 	var ray : Ray
@@ -228,8 +235,6 @@ static func _king_moves(pos : int, boards : PackedInt64Array, is_white_move : bo
 
 static func _is_check(boards : PackedInt64Array, is_white_turn : bool) -> bool:
 	# is_white_turn represents side being checked for check, i.e. the one currently moving
-	var start_time : int = Time.get_ticks_msec()
-	
 	var white_board : int = boards[0] | boards[1] | boards[2] | boards[3] | boards[4] | boards[5]
 	var black_board : int = boards[6] | boards[7] | boards[8] | boards[9] | boards[10] | boards[11]
 	var all_board : int = white_board | black_board
@@ -246,24 +251,20 @@ static func _is_check(boards : PackedInt64Array, is_white_turn : bool) -> bool:
 
 	for pos in _knight_moves(king_pos, boards, is_white_turn):
 		if _is_piece_at(pos, boards[1 + 6 - color_offset]):
-			_time_in_check += Time.get_ticks_msec() - start_time
 			return true
 			
 	# Rook or queen
 	for pos in _sliding_moves(king_pos, true, false, boards, is_white_turn):
 		if _is_piece_at(pos, boards[3 + 6 - color_offset]) || _is_piece_at(pos, boards[4 + 6 - color_offset]):
-			_time_in_check += Time.get_ticks_msec() - start_time
 			return true
 			
 	# Bishop or queen
 	for pos in _sliding_moves(king_pos, false, true, boards, is_white_turn):
 		if _is_piece_at(pos, boards[2 + 6 - color_offset]) || _is_piece_at(pos, boards[4 + 6 - color_offset]):
-			_time_in_check += Time.get_ticks_msec() - start_time
 			return true
 			
 	for pos in _king_moves(king_pos, boards, is_white_turn, false):
 		if _is_piece_at(pos, boards[5 + 6 - color_offset]):
-			_time_in_check += Time.get_ticks_msec() - start_time
 			return true
 	
 	# Check attacking pawns
@@ -281,10 +282,8 @@ static func _is_check(boards : PackedInt64Array, is_white_turn : bool) -> bool:
 				continue
 			
 			if _is_piece_at(offset_file + offset_rank * 8, boards[6 - color_offset]):
-				_time_in_check += Time.get_ticks_msec() - start_time
 				return true
 				
-	_time_in_check += Time.get_ticks_msec() - start_time
 	return false
 
 # Mutates boards using move
@@ -381,12 +380,12 @@ static func _is_pawn_move_legal(move : int, boards : PackedInt64Array, is_white_
 	else:
 		return false
 
-static func _is_castle_move_legal(move : int, boards : PackedInt64Array, castle_rights : Array[bool], is_white_move : bool) -> bool:
+static func _is_castle_move_legal(move : int, boards : PackedInt64Array, castle_rights : int, is_white_move : bool) -> bool:
 	var file_diff : int = Move.file_diff(move)
 	
 	if file_diff == 2:
 		# Castled kingside
-		if !(castle_rights[0] if is_white_move else castle_rights[2]):
+		if !(castle_rights & 1 if is_white_move else castle_rights >> 2 & 1):
 			return false
 		
 		if _is_occupied((move & 63) + 1, boards, true, true) || _is_occupied(move >> 6 & 63, boards, true, true):
@@ -396,7 +395,7 @@ static func _is_castle_move_legal(move : int, boards : PackedInt64Array, castle_
 			return false
 	elif file_diff == -2:
 		# Castled queenside
-		if !(castle_rights[1] if is_white_move else castle_rights[3]):
+		if !(castle_rights >> 1 & 1 if is_white_move else castle_rights >> 3 & 1):
 			return false
 		
 		if _is_occupied((move >> 6 & 63) - 1, boards, true, true) || _is_occupied(move >> 6 & 63, boards, true, true) || _is_occupied((move >> 6 & 63) + 1, boards, true, true):
@@ -415,7 +414,31 @@ static func is_move_castle(move : int) -> bool:
 				return true
 	return false
 
-static func is_move_legal(move : int, boards : PackedInt64Array, castle_rights : Array[bool], is_white_turn : bool) -> bool:
+static func get_castle_rook_move(move : int) -> int:
+	var rook_from : int
+	var rook_to : int
+	var color_offset : int
+	match move >> 6 & 63:
+		6:  # White kingside
+			rook_from = 7
+			rook_to = 5
+			color_offset = 0
+		2:  # White queenside
+			rook_from = 0
+			rook_to = 3
+			color_offset = 0
+		62: # Black kingside
+			rook_from = 63
+			rook_to = 61
+			color_offset = 6
+		58: # Black queenside
+			rook_from = 56
+			rook_to = 59
+			color_offset = 6
+			
+	return rook_from | (rook_to << 6) | ((3 + color_offset) << 12)
+
+static func is_move_legal(move : int, boards : PackedInt64Array, castle_rights : int, is_white_turn : bool) -> bool:
 	print("--- Checking move: %d -> %d (type %d) ---" % [move & 63, move >> 6 & 63, move >> 12 & 15])
 	
 	if move >> 6 & 63 < 0 || move >> 6 & 63 >= 64:
@@ -512,7 +535,7 @@ static func is_move_legal(move : int, boards : PackedInt64Array, castle_rights :
 			
 	return false
 	
-static func _is_generated_move_legal(move : int, boards : PackedInt64Array, is_white_turn : bool, castle_rights : Array[bool]) -> bool:
+static func _is_generated_move_legal(move : int, boards : PackedInt64Array, is_white_turn : bool, castle_rights : int) -> bool:
 	if move >> 6 & 63 < 0 || move >> 6 & 63 >= 64:
 		return false
 	
@@ -629,24 +652,69 @@ static func _get_all_piece_counts(boards : PackedInt64Array) -> PackedInt64Array
 					
 	return pieces
 	
-static func get_updated_castle_rights(move : int, castle_rights: Array[bool]) -> Array[bool]:
-	var new_rights : Array[bool] = castle_rights.duplicate()
-	
+static func get_updated_castle_rights(move : int, castle_rights: int) -> int:
 	match move & 63:
-		4:  new_rights[0] = false; new_rights[1] = false # White king
-		0:  new_rights[1] = false
-		7:  new_rights[0] = false
-		60: new_rights[2] = false; new_rights[3] = false # Black king
-		56: new_rights[3] = false
-		63: new_rights[2] = false
+		4:  castle_rights &= ~1; castle_rights &= ~(1 << 1) # White king
+		0:  castle_rights &= ~(1 << 1)
+		7:  castle_rights &= ~1
+		60: castle_rights &= ~(1 << 2); castle_rights &= ~(1 << 3) # Black king
+		56: castle_rights &= ~(1 << 3)
+		63: castle_rights &= ~(1 << 2)
 
 	match move >> 6 & 63:
-		0:  new_rights[1] = false
-		7:  new_rights[0] = false
-		56: new_rights[3] = false
-		63: new_rights[2] = false
+		0:  castle_rights &= ~(1 << 1)
+		7:  castle_rights &= ~1
+		56: castle_rights &= ~(1 << 3)
+		63: castle_rights &= ~(1 << 2)
 		
-	return new_rights
+	return castle_rights
+
+static func _compute_zobrist_values(rng : SplitMix64) -> PackedInt64Array:
+	var values : PackedInt64Array
+	
+	values.resize(12 * 64 + 8 + 16 + 1)
+	
+	for i in values.size():
+		values[i] = rng.random()
+		
+	return values
+
+static func _compute_zobrist_hash(zobrist_values : PackedInt64Array, boards : PackedInt64Array, castle_rights : int, is_white_turn : bool) -> int:
+	var hash : int = 0
+	
+	for i in range(64):
+		for j in range(12):
+			if _is_piece_at(i, boards[j]):
+				hash ^= zobrist_values[i * 12 + j]
+				
+	hash ^= zobrist_values[768 + castle_rights]
+	if is_white_turn:
+		hash ^= zobrist_values[784]
+		
+	return hash
+	
+static func _modify_zobrist_hash(zobrist_values : PackedInt64Array, hash : int, move : int, castle_rights : int, boards : PackedInt64Array) -> int:
+	hash ^= zobrist_values[(move & 63) * 12 + (move >> 12 & 15)]
+	hash ^= zobrist_values[(move >> 6 & 63) * 12 + (move >> 12 & 15)]
+	
+	for i in range(12):
+		if boards[i] >> (move >> 6 & 63) & 1 == 1:
+			hash ^= zobrist_values[(move >> 6 & 63) * 12 + i]
+			break
+	
+	hash ^= zobrist_values[784]
+	
+	var new_castle_rights : int = get_updated_castle_rights(move, castle_rights)
+	if new_castle_rights != castle_rights:
+		hash ^= zobrist_values[768 + castle_rights]
+		hash ^= zobrist_values[768 + new_castle_rights]
+
+	if is_move_castle(move):
+		var rook_move : int = get_castle_rook_move(move)
+		hash ^= zobrist_values[(rook_move & 63) * 12 + (rook_move >> 12 & 15)]
+		hash ^= zobrist_values[(rook_move >> 6 & 63) * 12 + (rook_move >> 12 & 15)]
+	
+	return hash
 
 # Returns static eval where white is positive and black is negative
 static func _static_eval(boards : PackedInt64Array, is_white_turn : bool) -> float:
@@ -687,12 +755,16 @@ static func _sort_moves(boards : PackedInt64Array, moves : PackedInt64Array, las
 	return sorted_moves
 
 # Negamax search
-static func _tree_search_eval(boards : PackedInt64Array, is_white_turn : bool, depth : int, alpha : float, beta : float, castle_rights : Array[bool], capture_stack : Array[PackedInt64Array]) -> float:
+static func _tree_search_eval(boards : PackedInt64Array, is_white_turn : bool, depth : int, alpha : float, beta : float, castle_rights : int, capture_stack : Array[PackedInt64Array], hash : int) -> float:
 	_nodes_searched += 1
 	
 	if depth == 0:
 		# Static eval
 		return _static_eval(boards, is_white_turn) * (1 if is_white_turn else -1)
+	
+	if transposition_table.has(hash):
+		if transposition_table[hash][1] >= depth:
+			return transposition_table[hash][0]
 	
 	var legal_moves : PackedInt64Array = _get_pseudo_legal_moves(boards, is_white_turn)
 	legal_moves = _sort_moves(boards, legal_moves, -1, is_white_turn)
@@ -703,8 +775,10 @@ static func _tree_search_eval(boards : PackedInt64Array, is_white_turn : bool, d
 			continue
 		legal_move_found = true
 		
+		var new_hash : int = _modify_zobrist_hash(zobrist_values, hash, move, castle_rights, boards)
+		
 		apply_move(move, boards, capture_stack[depth])
-		alpha = max(alpha, -_tree_search_eval(boards, !is_white_turn, depth - 1, -beta, -alpha, get_updated_castle_rights(move, castle_rights), capture_stack))
+		alpha = max(alpha, -_tree_search_eval(boards, !is_white_turn, depth - 1, -beta, -alpha, get_updated_castle_rights(move, castle_rights), capture_stack, new_hash))
 		_unapply_move(move, boards, capture_stack[depth])
 		
 		if alpha >= beta:
@@ -715,10 +789,11 @@ static func _tree_search_eval(boards : PackedInt64Array, is_white_turn : bool, d
 		else:
 			return 0.0
 	
+	transposition_table[hash] = [alpha, depth]
 	return alpha
 	
-# Returns the best move and its eval
-static func _move_search(boards : PackedInt64Array, is_white_turn : bool, depth : int, castle_rights : Array[bool], last_best_move : int) -> Array:
+# Returns the best move found
+static func _move_search(boards : PackedInt64Array, is_white_turn : bool, depth : int, castle_rights : int, last_best_move : int, hash : int) -> int:
 	var legal_moves : PackedInt64Array = _get_pseudo_legal_moves(boards, is_white_turn)
 	
 	if legal_moves.size() == 0:
@@ -742,8 +817,10 @@ static func _move_search(boards : PackedInt64Array, is_white_turn : bool, depth 
 		if !_is_generated_move_legal(move, boards, is_white_turn, castle_rights):
 			continue
 		
+		var new_hash : int = _modify_zobrist_hash(zobrist_values, hash, move, castle_rights, boards)
+		
 		apply_move(move, boards, capture_stack[depth])
-		var eval : float = -_tree_search_eval(boards, !is_white_turn, depth - 1, -beta, -alpha, get_updated_castle_rights(move, castle_rights), capture_stack)
+		var eval : float = -_tree_search_eval(boards, !is_white_turn, depth - 1, -beta, -alpha, get_updated_castle_rights(move, castle_rights), capture_stack, new_hash)
 		_unapply_move(move, boards, capture_stack[depth])
 		
 		if eval > max_eval:
@@ -752,30 +829,23 @@ static func _move_search(boards : PackedInt64Array, is_white_turn : bool, depth 
 		
 		alpha = max(alpha, eval)
 	
-	return [best_move, max_eval]
+	return best_move
 
-static func find_best_move(boards : PackedInt64Array, is_white_turn : bool, search_ms : int, castle_rights : Array[bool]) -> int:
+static func find_best_move(boards : PackedInt64Array, is_white_turn : bool, search_ms : int, castle_rights : int) -> int:
 	_nodes_searched = 0
 	_max_depth_searched = 0
-	_time_in_check = 0
 	
 	var start_ms : int = Time.get_ticks_msec()
 	var move : int = -1
 	
 	for i in range(1, MAX_DEPTH + 1):
 		_max_depth_searched = i
-		var move_and_score : Array = _move_search(boards, is_white_turn, i, castle_rights, move)
-		move = move_and_score[0]
-		var score : float = move_and_score[1]
-		
-		if abs(score) > 900.0:
-			break
-		
+		move = _move_search(boards, is_white_turn, i, castle_rights, move, _compute_zobrist_hash(zobrist_values, boards, castle_rights, is_white_turn))
+
 		if Time.get_ticks_msec() - start_ms >= search_ms:
 			break
 		
 	print("Search took " + str(Time.get_ticks_msec() - start_ms) + "ms")
-	print("Of that, " + str(_time_in_check) + " ms was spent on checking for checks")
 	print("Searched " + str(_nodes_searched) + " nodes")
 	print("Searched to depth " + str(_max_depth_searched))
 	
