@@ -3,6 +3,8 @@ class_name ChessEngine
 const PIECE_VALUES : PackedInt64Array = [120, 300, 340, 500, 900, 0]
 const MAX_DEPTH = 8
 
+enum {TT_EXACT, TT_ALPHA, TT_BETA}
+
 static var _is_check_capture_boards : PackedInt64Array = [0,0,0,0,0,0,0,0,0,0,0,0]
 
 static var rng : SplitMix64
@@ -576,78 +578,11 @@ static func is_move_legal(move : int, boards : PackedInt64Array, castle_rights :
 	return false
 	
 static func _is_generated_move_legal(move : int, boards : PackedInt64Array, is_white_turn : bool, castle_rights : int) -> bool:
-	if move >> 6 & 63 < 0 || move >> 6 & 63 >= 64:
-		return false
-	
-	if (move & 63) == move >> 6 & 63:
-		return false
-		
-	# Types 0–5 are white pieces
-	var is_white_move : bool = true if move >> 12 & 15 <= 5 else false
-	
-	if is_white_move != is_white_turn:
-		return false
-		
-	var white_board : int = boards[0] | boards[1] | boards[2] | boards[3] | boards[4] | boards[5]
-	var black_board : int = boards[6] | boards[7] | boards[8] | boards[9] | boards[10] | boards[11]
-	
-	if is_white_move && _is_occupied(move >> 6 & 63, boards, true, false) || !is_white_move && _is_occupied(move >> 6 & 63, boards, false, true):
-		return false
-		
-	if move >> 12 & 15 == 0 || move >> 12 & 15 == 6:
-		if _does_move_cause_check(move, boards, is_white_turn):
-			return false
-		return true
-	
-	var ray : Ray = _compute_ray(move & 63, move >> 6 & 63)
-	
-	if ray.type == Ray.INVALID:
-		return false
-		
-	if ray.type == Ray.KNIGHT:
-		if move >> 12 & 15 != 1 && move >> 12 & 15 != 7:
-			return false
-		if _does_move_cause_check(move, boards, is_white_turn):
-			return false
-		return true
-		
-	if ray.type == Ray.ROOK:
-		if move >> 12 & 15 != 3 && move >> 12 & 15 != 9 && move >> 12 & 15 != 4 && move >> 12 & 15 != 10 && move >> 12 & 15 != 5 && move >> 12 & 15 != 11:
-			return false
+	if is_move_castle(move):
+		var is_white_move : bool = (move >> 12 & 15) < 6
+		return _is_castle_move_legal(move, boards, castle_rights, is_white_move)
 			
-		# Check for blocking piece
-		if ray.ray & (white_board | black_board) != 0:
-			return false
-			
-		if (move >> 12 & 15 == 5 || move >> 12 & 15 == 11):
-			if is_move_castle(move):
-				return _is_castle_move_legal(move, boards, castle_rights, is_white_move)
-			return Move.tile_length(move) == 1 && !_does_move_cause_check(move, boards, is_white_turn)
-			
-		if _does_move_cause_check(move, boards, is_white_turn):
-			return false
-		return true
-		
-	if ray.type == Ray.BISHOP:
-		if move >> 12 & 15 != 2 && move >> 12 & 15 != 8 && move >> 12 & 15 != 4 && move >> 12 & 15 != 10 && move >> 12 & 15 != 5 && move >> 12 & 15 != 11:
-			return false
-			
-		# Check for blocking piece
-		if ray.ray & (white_board | black_board) != 0:
-			return false
-		
-		if (move >> 12 & 15 == 5 || move >> 12 & 15 == 11):
-			if Move.tile_length(move) == 1:
-				if _does_move_cause_check(move, boards, is_white_turn):
-					return false
-				return true
-			return false
-			
-		if _does_move_cause_check(move, boards, is_white_turn):
-			return false
-		return true
-			
-	return false
+	return !_does_move_cause_check(move, boards, is_white_turn)
 
 static func _get_pseudo_legal_moves(boards : PackedInt64Array, is_white_turn : bool, en_passant_file : int) -> PackedInt64Array:
 	var color_offset : int = 0 if is_white_turn else 6
@@ -679,18 +614,6 @@ static func _count_pieces_in_board(board : int) -> int:
 		count += 1
 	
 	return count
-
-static func _get_all_piece_counts(boards : PackedInt64Array) -> PackedInt64Array:
-	var pieces : PackedInt64Array
-	
-	for i in range(12):
-		var count : int = _count_pieces_in_board(boards[i])
-		var array : PackedInt64Array = []
-		array.resize(count)
-		array.fill(i)
-		pieces.append_array(array)
-					
-	return pieces
 	
 static func get_updated_castle_rights(move : int, castle_rights: int) -> int:
 	match move & 63:
@@ -734,7 +657,7 @@ static func _compute_zobrist_values(rng : SplitMix64) -> PackedInt64Array:
 		
 	return values
 
-static func _compute_zobrist_hash(zobrist_values : PackedInt64Array, boards : PackedInt64Array, castle_rights : int, is_white_turn : bool) -> int:
+static func _compute_zobrist_hash(zobrist_values : PackedInt64Array, boards : PackedInt64Array, castle_rights : int, is_white_turn : bool, en_passant_file : int) -> int:
 	var hash : int = 0
 	
 	for i in range(64):
@@ -745,10 +668,12 @@ static func _compute_zobrist_hash(zobrist_values : PackedInt64Array, boards : Pa
 	hash ^= zobrist_values[768 + castle_rights]
 	if is_white_turn:
 		hash ^= zobrist_values[784]
+	if en_passant_file != -1:
+		hash ^= zobrist_values[784 + 1 + en_passant_file]
 		
 	return hash
 	
-static func _modify_zobrist_hash(zobrist_values : PackedInt64Array, hash : int, move : int, castle_rights : int, boards : PackedInt64Array) -> int:
+static func _modify_zobrist_hash(zobrist_values : PackedInt64Array, hash : int, move : int, castle_rights : int, boards : PackedInt64Array, en_passant_file : int) -> int:
 	hash ^= zobrist_values[(move & 63) * 12 + (move >> 12 & 15)]
 	hash ^= zobrist_values[(move >> 6 & 63) * 12 + (move >> 12 & 15)]
 	
@@ -774,16 +699,25 @@ static func _modify_zobrist_hash(zobrist_values : PackedInt64Array, hash : int, 
 		var rook_move : int = get_castle_rook_move(move)
 		hash ^= zobrist_values[(rook_move & 63) * 12 + (rook_move >> 12 & 15)]
 		hash ^= zobrist_values[(rook_move >> 6 & 63) * 12 + (rook_move >> 12 & 15)]
+		
+	if en_passant_file != -1:
+		hash ^= zobrist_values[784 + 1 + en_passant_file]
+		
+	var new_en_passant_file : int = get_en_passant_file(move)
+	if new_en_passant_file != -1:
+		hash ^= zobrist_values[784 + 1 + new_en_passant_file]
 	
 	return hash
 
 # Returns static eval where white is positive and black is negative
 static func _static_eval(boards : PackedInt64Array, is_white_turn : bool) -> float:
-	var pieces : PackedInt64Array = _get_all_piece_counts(boards)
 	var sum : int = 0
 	
-	for piece in pieces:
-		sum += PIECE_VALUES[piece % 6] * (1 if piece < 6 else -1)
+	for j in range(6):
+		sum += _count_pieces_in_board(boards[j]) * PIECE_VALUES[j]
+		
+	for j in range(6, 12):
+		sum -= _count_pieces_in_board(boards[j]) * PIECE_VALUES[j - 6]
 		
 	return sum / 100.0
 
@@ -823,12 +757,22 @@ static func _tree_search_eval(boards : PackedInt64Array, is_white_turn : bool, d
 		# Static eval
 		return _static_eval(boards, is_white_turn) * (1 if is_white_turn else -1)
 	
+	var best_move : int = -1
+	
 	if transposition_table.has(hash):
 		if transposition_table[hash][1] >= depth:
-			return transposition_table[hash][0]
+			if transposition_table[hash][2] == TT_EXACT:
+				return transposition_table[hash][0]
+			if transposition_table[hash][2] == TT_ALPHA && transposition_table[hash][0] <= alpha:
+				return alpha
+			if transposition_table[hash][2] == TT_BETA && transposition_table[hash][0] >= beta:
+				return beta
+		best_move = transposition_table[hash][3]
+	
+	var flag : int = TT_ALPHA
 	
 	var legal_moves : PackedInt64Array = _get_pseudo_legal_moves(boards, is_white_turn, en_passant_file)
-	legal_moves = _sort_moves(boards, legal_moves, -1, is_white_turn)
+	legal_moves = _sort_moves(boards, legal_moves, best_move, is_white_turn)
 	
 	var legal_move_found : bool = false
 	for move in legal_moves:
@@ -836,13 +780,21 @@ static func _tree_search_eval(boards : PackedInt64Array, is_white_turn : bool, d
 			continue
 		legal_move_found = true
 		
-		var new_hash : int = _modify_zobrist_hash(zobrist_values, hash, move, castle_rights, boards)
+		var new_hash : int = _modify_zobrist_hash(zobrist_values, hash, move, castle_rights, boards, en_passant_file)
 		
 		apply_move(move, boards, capture_stack[depth])
-		alpha = max(alpha, -_tree_search_eval(boards, !is_white_turn, depth - 1, -beta, -alpha, get_updated_castle_rights(move, castle_rights), get_en_passant_file(move), capture_stack, new_hash))
+		
+		var value : float = -_tree_search_eval(boards, !is_white_turn, depth - 1, -beta, -alpha, get_updated_castle_rights(move, castle_rights), get_en_passant_file(move), capture_stack, new_hash)
+		
+		if value > alpha:
+			flag = TT_EXACT
+			alpha = value
+			best_move = move
+		
 		_unapply_move(move, boards, capture_stack[depth])
 		
 		if alpha >= beta:
+			flag = TT_BETA
 			break
 	if !legal_move_found:
 		if _is_check(boards, is_white_turn):
@@ -850,7 +802,7 @@ static func _tree_search_eval(boards : PackedInt64Array, is_white_turn : bool, d
 		else:
 			return 0.0
 	
-	transposition_table[hash] = [alpha, depth]
+	transposition_table[hash] = [alpha, depth, flag, best_move]
 	return alpha
 	
 # Returns the best move found
@@ -878,7 +830,7 @@ static func _move_search(boards : PackedInt64Array, is_white_turn : bool, depth 
 		if !_is_generated_move_legal(move, boards, is_white_turn, castle_rights):
 			continue
 		
-		var new_hash : int = _modify_zobrist_hash(zobrist_values, hash, move, castle_rights, boards)
+		var new_hash : int = _modify_zobrist_hash(zobrist_values, hash, move, castle_rights, boards, en_passant_file)
 		
 		apply_move(move, boards, capture_stack[depth])
 		var eval : float = -_tree_search_eval(boards, !is_white_turn, depth - 1, -beta, -alpha, get_updated_castle_rights(move, castle_rights), get_en_passant_file(move), capture_stack, new_hash)
@@ -901,7 +853,7 @@ static func find_best_move(boards : PackedInt64Array, is_white_turn : bool, sear
 	
 	for i in range(1, MAX_DEPTH + 1):
 		_max_depth_searched = i
-		move = _move_search(boards, is_white_turn, i, castle_rights, en_passant_file, move, _compute_zobrist_hash(zobrist_values, boards, castle_rights, is_white_turn))
+		move = _move_search(boards, is_white_turn, i, castle_rights, en_passant_file, move, _compute_zobrist_hash(zobrist_values, boards, castle_rights, is_white_turn, en_passant_file))
 
 		if Time.get_ticks_msec() - start_ms >= search_ms:
 			break
