@@ -23,7 +23,7 @@ func _on_button_up() -> void:
 		place_piece.emit(texture.position, board_pos, piece_type)
 		texture.z_index = 0
 
-func _process(delta: float) -> void:
+func _process(_delta: float) -> void:
 	if is_held:
 		texture.global_position = get_global_mouse_position() - texture.size / 2.0 
 

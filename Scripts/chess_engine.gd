@@ -67,9 +67,9 @@ static func _is_occupied(pos : int, boards : PackedInt64Array, count_white : boo
 static func _is_piece_at(pos: int, board: int) -> bool:
 	return board >> pos & 1 == 1
 
-static func _pawn_moves(pos : int, boards : PackedInt64Array, is_white_move : bool) -> PackedInt64Array:
+static func _pawn_moves(pos : int, boards : PackedInt64Array, is_white_move : bool, en_passant_file : int) -> PackedInt64Array:
 	var moves : PackedInt64Array
-	var start_rank : int = 1	 if is_white_move else 6
+	var start_rank : int = 1 if is_white_move else 6
 	
 	var file : int = pos % 8
 	var rank : int = pos / 8
@@ -90,6 +90,11 @@ static func _pawn_moves(pos : int, boards : PackedInt64Array, is_white_move : bo
 		var capture_pos : int = offset_file + (rank + direction) * 8
 		if _is_occupied(capture_pos, boards, !is_white_move, is_white_move):
 			moves.append(capture_pos)
+		
+	var en_passant_rank : int = 4 if is_white_move else 3
+		
+	if en_passant_file != -1 && abs(file - en_passant_file) == 1 && rank == en_passant_rank:
+		moves.append(en_passant_file + (rank + direction) * 8)
 		
 	return moves
 	
@@ -291,9 +296,19 @@ static func apply_move(move : int, boards : PackedInt64Array, capture_boards : P
 	for i in range(12):
 		capture_boards[i] = 0
 		if boards[i] >> (move >> 6 & 63) & 1 == 1:
+			# Clear pieces
 			boards[i] &= ~(1 << (move >> 6 & 63))
 			capture_boards[i] |= 1 << (move >> 6 & 63)
+	# Move piece
 	boards[move >> 12 & 15] ^= 1 << (move & 63) | 1 << (move >> 6 & 63)
+	
+	if _is_move_en_passant(move, boards):
+		var direction : int = 1 if (move >> 12 & 15) < 6 else - 1
+		var capture_pos : int = (move >> 6 & 63) - direction * 8
+		
+		var board : int = 6 - (move >> 12 & 15)
+		boards[board] &= ~(1 << capture_pos)
+		capture_boards[board] |= 1 << capture_pos
 	
 	if is_move_castle(move):
 		var rook_from : int
@@ -326,7 +341,15 @@ static func _unapply_move(move : int, boards : PackedInt64Array, capture_boards 
 	for i in range(12):
 		if capture_boards[i] >> (move >> 6 & 63) & 1 == 1:
 			boards[i] |= 1 << (move >> 6 & 63)
-		capture_boards[i] = 0
+		
+	if _is_move_en_passant(move, boards):
+		var direction : int = 1 if (move >> 12 & 15) < 6 else - 1
+		var capture_pos : int = (move >> 6 & 63) - direction * 8
+		
+		var board : int = 6 - (move >> 12 & 15)
+		
+		if capture_boards[board] >> capture_pos & 1 == 1:
+			boards[board] |= 1 << capture_pos
 	
 	if is_move_castle(move):
 		var rook_from : int
@@ -358,21 +381,38 @@ static func _does_move_cause_check(move : int, boards : PackedInt64Array, is_whi
 	var result : bool = _is_check(boards, is_white_turn)
 	_unapply_move(move, boards, _is_check_capture_boards)
 	return result
+	
+static func _is_move_en_passant(move : int, boards : PackedInt64Array) -> bool:
+	if (move >> 12 & 15 != 0 && move >> 12 & 15 != 6):
+		return false
+		
+	var direction : int = 1 if (move >> 12 & 15) < 6 else -1
+	var start_rank : int = (move & 63) / 8
+	var end_rank : int = (move >> 6 & 63) / 8
+	var start_file : int = (move & 63) % 8
+	var end_file : int = (move >> 6 & 63) % 8
+	var rank_diff : int = (end_rank - start_rank) * direction
+	var file_diff : int = abs(end_file - start_file)
+		
+	if start_rank != (4 if (move >> 12 & 15) < 6 else 3) || file_diff != 1 || rank_diff != 1 || _is_occupied(end_rank * 8 + end_file, boards, (move >> 12 & 15) >= 6, (move >> 12 & 15) < 6):
+		return false
+		
+	return true
 
-static func _is_pawn_move_legal(move : int, boards : PackedInt64Array, is_white_move : bool):		
+static func _is_pawn_move_legal(move : int, boards : PackedInt64Array, is_white_move : bool, en_passant_file : int):
 	var direction : int = 1 if is_white_move else -1
 	var start_rank : int = (move & 63) / 8
 	var end_rank : int = (move >> 6 & 63) / 8
 	var start_file : int = (move & 63) % 8
 	var end_file : int = (move >> 6 & 63) % 8
 	var rank_diff : int = (end_rank - start_rank) * direction
-	var file_diff : int = abs(end_file - start_file)		
+	var file_diff : int = abs(end_file - start_file)
 	
 	if rank_diff == 1:
 		if file_diff == 0 && !_is_occupied(move >> 6 & 63, boards, true, true):
 			return true
 		elif file_diff == 1:
-			return _is_occupied(move >> 6 & 63, boards, !is_white_move, is_white_move)
+			return _is_occupied(move >> 6 & 63, boards, !is_white_move, is_white_move) || end_file == en_passant_file && start_rank == (4 if is_white_move else 3) && file_diff == 1 && _is_occupied((move >> 6 & 63) - 8 * direction, boards, !is_white_move, is_white_move)
 		else:
 			return false
 	elif rank_diff == 2 && file_diff == 0 && start_rank == (1 if is_white_move else 6) && !_is_occupied((move & 63) + 8 * direction, boards, true, true) && !_is_occupied(move >> 6 & 63, boards, true, true):
@@ -438,7 +478,7 @@ static func get_castle_rook_move(move : int) -> int:
 			
 	return rook_from | (rook_to << 6) | ((3 + color_offset) << 12)
 
-static func is_move_legal(move : int, boards : PackedInt64Array, castle_rights : int, is_white_turn : bool) -> bool:
+static func is_move_legal(move : int, boards : PackedInt64Array, castle_rights : int, en_passant_file : int, is_white_turn : bool) -> bool:
 	print("--- Checking move: %d -> %d (type %d) ---" % [move & 63, move >> 6 & 63, move >> 12 & 15])
 	
 	if move >> 6 & 63 < 0 || move >> 6 & 63 >= 64:
@@ -465,7 +505,7 @@ static func is_move_legal(move : int, boards : PackedInt64Array, castle_rights :
 		
 	if move >> 12 & 15 == 0 || move >> 12 & 15 == 6:
 		# Is pawn move
-		if _is_pawn_move_legal(move, boards, is_white_move):
+		if _is_pawn_move_legal(move, boards, is_white_move, en_passant_file):
 			if _does_move_cause_check(move, boards, is_white_turn):
 				print("REJECTED: move leaves king in check")
 				return false
@@ -609,7 +649,7 @@ static func _is_generated_move_legal(move : int, boards : PackedInt64Array, is_w
 			
 	return false
 
-static func _get_pseudo_legal_moves(boards : PackedInt64Array, is_white_turn : bool) -> PackedInt64Array:
+static func _get_pseudo_legal_moves(boards : PackedInt64Array, is_white_turn : bool, en_passant_file : int) -> PackedInt64Array:
 	var color_offset : int = 0 if is_white_turn else 6
 	var moves : PackedInt64Array
 	
@@ -619,7 +659,7 @@ static func _get_pseudo_legal_moves(boards : PackedInt64Array, is_white_turn : b
 				continue
 			var move_targets : PackedInt64Array
 			match type % 6:
-				0: move_targets = _pawn_moves(i, boards, is_white_turn)
+				0: move_targets = _pawn_moves(i, boards, is_white_turn, en_passant_file)
 				1: move_targets = _knight_moves(i, boards, is_white_turn)
 				2: move_targets = _sliding_moves(i, false, true, boards, is_white_turn) # Bishop
 				3: move_targets = _sliding_moves(i, true, false, boards, is_white_turn) # Rook
@@ -669,6 +709,21 @@ static func get_updated_castle_rights(move : int, castle_rights: int) -> int:
 		
 	return castle_rights
 
+static func get_en_passant_file(move : int) -> int:
+	if move >> 12 & 15 != 0 && move >> 12 & 15 != 6:
+		return -1
+		
+	if move >> 12 & 15 == 0:
+		# Start on rank 1 and end on rank 3
+		if (move & 63) / 8 == 1 && (move >> 6 & 63) / 8 == 3:
+			return (move >> 6 & 63) % 8
+	else:
+			# Start on rank 6 and end on rank 4
+		if (move & 63) / 8 == 6 && (move >> 6 & 63) / 8 == 4:
+			return (move >> 6 & 63) % 8
+
+	return -1
+
 static func _compute_zobrist_values(rng : SplitMix64) -> PackedInt64Array:
 	var values : PackedInt64Array
 	
@@ -708,6 +763,12 @@ static func _modify_zobrist_hash(zobrist_values : PackedInt64Array, hash : int, 
 	if new_castle_rights != castle_rights:
 		hash ^= zobrist_values[768 + castle_rights]
 		hash ^= zobrist_values[768 + new_castle_rights]
+
+	if _is_move_en_passant(move, boards):
+		var direction : int = 1 if (move >> 12 & 15) < 6 else -1
+		var captured_sq : int = (move >> 6 & 63) - direction * 8
+		var enemy_pawn_type : int = 6 if (move >> 12 & 15) < 6 else 0
+		hash ^= zobrist_values[captured_sq * 12 + enemy_pawn_type]
 
 	if is_move_castle(move):
 		var rook_move : int = get_castle_rook_move(move)
@@ -755,7 +816,7 @@ static func _sort_moves(boards : PackedInt64Array, moves : PackedInt64Array, las
 	return sorted_moves
 
 # Negamax search
-static func _tree_search_eval(boards : PackedInt64Array, is_white_turn : bool, depth : int, alpha : float, beta : float, castle_rights : int, capture_stack : Array[PackedInt64Array], hash : int) -> float:
+static func _tree_search_eval(boards : PackedInt64Array, is_white_turn : bool, depth : int, alpha : float, beta : float, castle_rights : int, en_passant_file :int, capture_stack : Array[PackedInt64Array], hash : int) -> float:
 	_nodes_searched += 1
 	
 	if depth == 0:
@@ -766,7 +827,7 @@ static func _tree_search_eval(boards : PackedInt64Array, is_white_turn : bool, d
 		if transposition_table[hash][1] >= depth:
 			return transposition_table[hash][0]
 	
-	var legal_moves : PackedInt64Array = _get_pseudo_legal_moves(boards, is_white_turn)
+	var legal_moves : PackedInt64Array = _get_pseudo_legal_moves(boards, is_white_turn, en_passant_file)
 	legal_moves = _sort_moves(boards, legal_moves, -1, is_white_turn)
 	
 	var legal_move_found : bool = false
@@ -778,7 +839,7 @@ static func _tree_search_eval(boards : PackedInt64Array, is_white_turn : bool, d
 		var new_hash : int = _modify_zobrist_hash(zobrist_values, hash, move, castle_rights, boards)
 		
 		apply_move(move, boards, capture_stack[depth])
-		alpha = max(alpha, -_tree_search_eval(boards, !is_white_turn, depth - 1, -beta, -alpha, get_updated_castle_rights(move, castle_rights), capture_stack, new_hash))
+		alpha = max(alpha, -_tree_search_eval(boards, !is_white_turn, depth - 1, -beta, -alpha, get_updated_castle_rights(move, castle_rights), get_en_passant_file(move), capture_stack, new_hash))
 		_unapply_move(move, boards, capture_stack[depth])
 		
 		if alpha >= beta:
@@ -793,8 +854,8 @@ static func _tree_search_eval(boards : PackedInt64Array, is_white_turn : bool, d
 	return alpha
 	
 # Returns the best move found
-static func _move_search(boards : PackedInt64Array, is_white_turn : bool, depth : int, castle_rights : int, last_best_move : int, hash : int) -> int:
-	var legal_moves : PackedInt64Array = _get_pseudo_legal_moves(boards, is_white_turn)
+static func _move_search(boards : PackedInt64Array, is_white_turn : bool, depth : int, castle_rights : int, en_passant_file : int, last_best_move : int, hash : int) -> int:
+	var legal_moves : PackedInt64Array = _get_pseudo_legal_moves(boards, is_white_turn, en_passant_file)
 	
 	if legal_moves.size() == 0:
 		print("No moves available")
@@ -820,7 +881,7 @@ static func _move_search(boards : PackedInt64Array, is_white_turn : bool, depth 
 		var new_hash : int = _modify_zobrist_hash(zobrist_values, hash, move, castle_rights, boards)
 		
 		apply_move(move, boards, capture_stack[depth])
-		var eval : float = -_tree_search_eval(boards, !is_white_turn, depth - 1, -beta, -alpha, get_updated_castle_rights(move, castle_rights), capture_stack, new_hash)
+		var eval : float = -_tree_search_eval(boards, !is_white_turn, depth - 1, -beta, -alpha, get_updated_castle_rights(move, castle_rights), get_en_passant_file(move), capture_stack, new_hash)
 		_unapply_move(move, boards, capture_stack[depth])
 		
 		if eval > max_eval:
@@ -831,7 +892,7 @@ static func _move_search(boards : PackedInt64Array, is_white_turn : bool, depth 
 	
 	return best_move
 
-static func find_best_move(boards : PackedInt64Array, is_white_turn : bool, search_ms : int, castle_rights : int) -> int:
+static func find_best_move(boards : PackedInt64Array, is_white_turn : bool, search_ms : int, castle_rights : int, en_passant_file : int) -> int:
 	_nodes_searched = 0
 	_max_depth_searched = 0
 	
@@ -840,7 +901,7 @@ static func find_best_move(boards : PackedInt64Array, is_white_turn : bool, sear
 	
 	for i in range(1, MAX_DEPTH + 1):
 		_max_depth_searched = i
-		move = _move_search(boards, is_white_turn, i, castle_rights, move, _compute_zobrist_hash(zobrist_values, boards, castle_rights, is_white_turn))
+		move = _move_search(boards, is_white_turn, i, castle_rights, en_passant_file, move, _compute_zobrist_hash(zobrist_values, boards, castle_rights, is_white_turn))
 
 		if Time.get_ticks_msec() - start_ms >= search_ms:
 			break
